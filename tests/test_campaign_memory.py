@@ -1,9 +1,11 @@
 import asyncio
+from pathlib import Path
 
 import main
+from export import format_session_markdown
 from gm import parse_structured_patch
 from main import LLMTRPGPlugin
-from models import GameSession, PlayerCharacter
+from models import GameSession, PlayerCharacter, ScenarioScript
 from memory import (
     apply_knowledge_patches,
     build_memory_context,
@@ -11,6 +13,9 @@ from memory import (
     record_turn_timeline_event,
 )
 from prompts import build_action_prompt
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_old_session_deserialization_gets_empty_campaign_knowledge():
@@ -347,6 +352,93 @@ def test_memory_query_commands_do_not_expose_gm_only_entries():
     assert "雾镇真相" in recap[0]
 
 
+def test_trpg_start_initializes_campaign_knowledge_from_scenario(monkeypatch):
+    async def fake_call_gm(context, event, *, prompt, system_prompt):
+        return "祠堂木门自行合上。"
+
+    monkeypatch.setattr(main, "call_gm", fake_call_gm)
+    script = ScenarioScript(
+        script_id="fog-town",
+        title="雾镇",
+        language="zh",
+        theme="民俗恐怖",
+        summary="被浓雾封锁的小镇。",
+        background="十年前火灾的真相无人提起。",
+        opening_scene="玩家在祠堂醒来。",
+        hooks=["钟楼停摆", "旧井低语"],
+        gm_notes="林守夜隐藏了火灾真相。",
+    )
+    plugin = LLMTRPGPlugin(context=object())
+    plugin.storage = ScenarioStorage(script)
+
+    asyncio.run(_collect(plugin.trpg_start(FakeEvent(user_id="gm", sender_name="Keeper"), "雾镇")))
+    knowledge = plugin.storage.session.campaign_knowledge
+
+    assert any(fact.text == "被浓雾封锁的小镇。" for fact in knowledge.facts)
+    assert any(
+        fact.text == "十年前火灾的真相无人提起。"
+        and fact.visibility == "gm_only"
+        for fact in knowledge.facts
+    )
+    assert knowledge.clues["hook-1"].title == "钟楼停摆"
+    assert knowledge.clues["hook-1"].visibility == "private"
+    assert any("祠堂" in entry.summary for entry in knowledge.timeline)
+
+
+def test_markdown_export_includes_campaign_knowledge_sections():
+    session = make_session()
+    apply_knowledge_patches(
+        session,
+        [
+            {"op": "add_timeline_event", "summary": "玩家抵达祠堂。"},
+            {
+                "op": "update_entity",
+                "entity_id": "bell-tower",
+                "name": "钟楼",
+                "kind": "location",
+                "summary": "钟楼指针停在三点十七分。",
+            },
+            {"op": "add_fact", "text": "钟楼地下有密道。", "visibility": "gm_only"},
+            {
+                "op": "update_clue",
+                "clue_id": "stopped-clock",
+                "title": "停摆钟楼",
+                "detail": "指针停在三点十七分。",
+                "clue_status": "discovered",
+            },
+            {
+                "op": "update_thread",
+                "thread_id": "fog",
+                "title": "浓雾来源",
+                "summary": "仍未查明。",
+                "thread_status": "active",
+            },
+        ],
+    )
+
+    markdown = format_session_markdown(session)
+
+    assert "## 战役时间线" in markdown
+    assert "玩家抵达祠堂。" in markdown
+    assert "## 战役实体" in markdown
+    assert "钟楼指针停在三点十七分。" in markdown
+    assert "## 战役事实" in markdown
+    assert "钟楼地下有密道。" in markdown
+    assert "## 线索" in markdown
+    assert "停摆钟楼" in markdown
+    assert "## 剧情线" in markdown
+    assert "浓雾来源" in markdown
+
+
+def test_dashboard_contains_campaign_knowledge_tab_and_filters():
+    html = (ROOT / "pages" / "dashboard" / "index.html").read_text(encoding="utf-8")
+
+    assert "战役知识库" in html
+    assert "knowledge-visibility" in html
+    assert "knowledge-type" in html
+    assert "knowledge-status" in html
+
+
 def make_session() -> GameSession:
     session = GameSession.new(
         session_id="session-1",
@@ -378,6 +470,21 @@ class FakeEvent:
 class FakeStorage:
     def __init__(self, session: GameSession) -> None:
         self.session = session
+
+    async def load_session(self, session_id: str) -> GameSession | None:
+        return self.session
+
+    async def save_session(self, session: GameSession) -> None:
+        self.session = session
+
+
+class ScenarioStorage:
+    def __init__(self, script: ScenarioScript) -> None:
+        self.script = script
+        self.session = None
+
+    async def find_scenario_script(self, query: str) -> ScenarioScript | None:
+        return self.script if query in {self.script.script_id, self.script.title} else None
 
     async def load_session(self, session_id: str) -> GameSession | None:
         return self.session

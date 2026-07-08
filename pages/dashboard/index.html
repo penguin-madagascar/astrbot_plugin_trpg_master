@@ -37,6 +37,7 @@
         <section class="workspace" aria-label="剧本编辑与设置">
           <nav class="tabs" aria-label="管理区域">
             <button class="tab active" type="button" data-tab="script">剧本编辑</button>
+            <button class="tab" type="button" data-tab="knowledge">战役知识库</button>
             <button class="tab" type="button" data-tab="settings">插件设置</button>
             <button class="tab" type="button" data-tab="import">导入导出</button>
           </nav>
@@ -106,6 +107,50 @@
                 <textarea id="script-notes" name="gm_notes" rows="5"></textarea>
               </label>
             </form>
+          </section>
+
+          <section id="tab-knowledge" class="tab-panel" aria-labelledby="knowledge-heading">
+            <div class="form">
+              <div class="section-header">
+                <div>
+                  <h2 id="knowledge-heading">战役知识库</h2>
+                  <p>按可见性、类型和状态筛选当前载入的战役记忆。</p>
+                </div>
+              </div>
+              <div class="grid three">
+                <label class="field" for="knowledge-visibility">
+                  <span>可见性</span>
+                  <select id="knowledge-visibility">
+                    <option value="">全部</option>
+                    <option value="public">public</option>
+                    <option value="private">private</option>
+                    <option value="gm_only">gm_only</option>
+                  </select>
+                </label>
+                <label class="field" for="knowledge-type">
+                  <span>类型</span>
+                  <select id="knowledge-type">
+                    <option value="">全部</option>
+                    <option value="timeline">时间线</option>
+                    <option value="entity">实体</option>
+                    <option value="fact">事实</option>
+                    <option value="clue">线索</option>
+                    <option value="thread">剧情线</option>
+                    <option value="relationship">关系</option>
+                  </select>
+                </label>
+                <label class="field" for="knowledge-status">
+                  <span>状态</span>
+                  <select id="knowledge-status">
+                    <option value="">全部</option>
+                    <option value="active">active</option>
+                    <option value="resolved">resolved</option>
+                    <option value="obsolete">obsolete</option>
+                  </select>
+                </label>
+              </div>
+              <div id="knowledge-list" class="knowledge-list" role="list"></div>
+            </div>
           </section>
 
           <section id="tab-settings" class="tab-panel" aria-labelledby="settings-heading">

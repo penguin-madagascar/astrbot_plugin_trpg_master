@@ -87,6 +87,8 @@ def format_session_markdown(session: GameSession) -> str:
         lines.extend(["", "### Recent Events", ""])
         lines.extend(f"- {event}" for event in session.recent_events)
 
+    _append_campaign_knowledge(lines, session)
+
     lines.extend(["", f"## {labels['logs']}", ""])
     for entry in session.logs:
         lines.extend(
@@ -105,3 +107,57 @@ def format_session_markdown(session: GameSession) -> str:
 def _safe_filename(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.\-\u4e00-\u9fff]+", "_", value).strip("_")
     return cleaned[:80] or "trpg_session"
+
+
+def _append_campaign_knowledge(lines: list[str], session: GameSession) -> None:
+    knowledge = session.campaign_knowledge
+    if knowledge.timeline:
+        lines.extend(["", "## 战役时间线", ""])
+        lines.extend(
+            f"- T{entry.turn} [{entry.visibility}/{entry.importance}]: {entry.summary}"
+            for entry in knowledge.timeline
+            if entry.status != "obsolete"
+        )
+    if knowledge.entities:
+        lines.extend(["", "## 战役实体", ""])
+        for entity in knowledge.entities.values():
+            aliases = f" aliases={', '.join(entity.aliases)}" if entity.aliases else ""
+            lines.append(
+                f"- **{entity.name}** ({entity.kind}, {entity.visibility}/{entity.importance})"
+                f"{aliases}: {entity.summary}"
+            )
+    if knowledge.facts:
+        lines.extend(["", "## 战役事实", ""])
+        lines.extend(
+            f"- [{fact.visibility}/{fact.importance}] {fact.text}"
+            for fact in knowledge.facts
+            if fact.status != "obsolete"
+        )
+    if knowledge.clues:
+        lines.extend(["", "## 线索", ""])
+        for clue in knowledge.clues.values():
+            if clue.status == "obsolete":
+                continue
+            lines.append(
+                f"- **{clue.title}** [{clue.clue_status}, {clue.visibility}/{clue.importance}]: "
+                f"{clue.detail}"
+            )
+    if knowledge.threads:
+        lines.extend(["", "## 剧情线", ""])
+        for thread in knowledge.threads.values():
+            if thread.status == "obsolete":
+                continue
+            lines.append(
+                f"- **{thread.title}** [{thread.thread_status}, {thread.visibility}/{thread.importance}]: "
+                f"{thread.summary}"
+            )
+    if knowledge.relationships:
+        lines.extend(["", "## 关系", ""])
+        lines.extend(
+            f"- {relationship.source} -> {relationship.target} "
+            f"[{relationship.visibility}/{relationship.importance}]: {relationship.description}"
+            for relationship in knowledge.relationships
+            if relationship.status != "obsolete"
+        )
+    if knowledge.archive_summary:
+        lines.extend(["", "## 归档摘要", "", knowledge.archive_summary])

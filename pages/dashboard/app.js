@@ -4,6 +4,7 @@ const state = {
   settingsSchema: {},
   settings: {},
   scripts: [],
+  knowledgeEntries: [],
   currentScriptId: "",
 };
 
@@ -21,6 +22,10 @@ const els = {
   importScripts: document.getElementById("import-scripts"),
   importFilename: document.getElementById("import-filename"),
   importContent: document.getElementById("import-content"),
+  knowledgeVisibility: document.getElementById("knowledge-visibility"),
+  knowledgeType: document.getElementById("knowledge-type"),
+  knowledgeStatus: document.getElementById("knowledge-status"),
+  knowledgeList: document.getElementById("knowledge-list"),
 };
 
 const scriptFields = {
@@ -54,8 +59,10 @@ async function loadDashboard() {
   state.settingsSchema = data.settings_schema || {};
   state.settings = data.settings || {};
   state.scripts = data.scripts || [];
+  state.knowledgeEntries = data.knowledge_entries || [];
   renderSettings();
   renderScripts();
+  renderKnowledge();
   if (state.scripts.length > 0) {
     selectScript(state.scripts[0].script_id);
   } else {
@@ -150,6 +157,49 @@ function renderScripts() {
     meta.textContent = `${script.language || "zh"} · ${script.theme || script.title || ""}`;
     button.append(title, meta);
     els.scripts.append(button);
+  });
+}
+
+function renderKnowledge() {
+  const visibility = els.knowledgeVisibility.value;
+  const type = els.knowledgeType.value;
+  const status = els.knowledgeStatus.value;
+  const entries = state.knowledgeEntries.filter((entry) => {
+    if (visibility && entry.visibility !== visibility) {
+      return false;
+    }
+    if (type && entry.type !== type) {
+      return false;
+    }
+    if (status && entry.status !== status) {
+      return false;
+    }
+    return true;
+  });
+  els.knowledgeList.replaceChildren();
+  if (entries.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "暂无匹配战役记忆。";
+    empty.className = "empty";
+    els.knowledgeList.append(empty);
+    return;
+  }
+  entries.forEach((entry) => {
+    const item = document.createElement("article");
+    item.className = "knowledge-item";
+
+    const title = document.createElement("strong");
+    title.textContent = entry.title || entry.text || entry.id || "未命名记忆";
+    const meta = document.createElement("span");
+    meta.textContent = `${entry.type || "-"} · ${entry.visibility || "-"} · ${entry.status || "-"}`;
+    const body = document.createElement("span");
+    body.textContent = entry.summary || entry.detail || entry.text || "";
+
+    item.append(title, meta);
+    if (body.textContent) {
+      item.append(body);
+    }
+    els.knowledgeList.append(item);
   });
 }
 
@@ -298,6 +348,9 @@ function bindEvents() {
   els.settingsForm.addEventListener("submit", (event) => runAction(() => saveSettings(event)));
   els.importScripts.addEventListener("click", () => runAction(importScripts));
   els.exportScripts.addEventListener("click", () => runAction(exportScripts));
+  els.knowledgeVisibility.addEventListener("change", renderKnowledge);
+  els.knowledgeType.addEventListener("change", renderKnowledge);
+  els.knowledgeStatus.addEventListener("change", renderKnowledge);
 }
 
 async function runAction(action) {

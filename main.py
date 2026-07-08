@@ -373,6 +373,7 @@ class LLMTRPGPlugin(Star):
             session.history_summary = _scenario_history_summary(script)
             session.scene["description"] = script.opening_scene
             session.plot_threads.extend(script.hooks)
+            _initialize_scenario_knowledge(session, script)
 
         try:
             opening = await call_gm(
@@ -1067,6 +1068,7 @@ class LLMTRPGPlugin(Star):
                 "settings_schema": _load_config_schema(),
                 "settings": dict(self.config),
                 "scripts": _script_list_payload(scripts),
+                "knowledge_entries": [],
             }
         )
 
@@ -1516,6 +1518,72 @@ def _scenario_history_summary(script: ScenarioScript) -> str:
         f"GM 备注：{script.gm_notes}" if script.gm_notes else "",
     ]
     return "\n".join(part for part in parts if part)
+
+
+def _initialize_scenario_knowledge(
+    session: GameSession,
+    script: ScenarioScript,
+) -> None:
+    patches: list[dict[str, Any]] = []
+    if script.summary:
+        patches.append(
+            {
+                "op": "add_fact",
+                "text": script.summary,
+                "visibility": "public",
+                "importance": 3,
+                "tags": script.tags,
+                "source": "scenario",
+            }
+        )
+    if script.background:
+        patches.append(
+            {
+                "op": "add_fact",
+                "text": script.background,
+                "visibility": "gm_only",
+                "importance": 4,
+                "tags": script.tags,
+                "source": "scenario",
+            }
+        )
+    if script.gm_notes:
+        patches.append(
+            {
+                "op": "add_fact",
+                "text": script.gm_notes,
+                "visibility": "gm_only",
+                "importance": 5,
+                "tags": script.tags,
+                "source": "scenario",
+            }
+        )
+    if script.opening_scene:
+        patches.append(
+            {
+                "op": "add_timeline_event",
+                "summary": f"剧本开场：{script.opening_scene}",
+                "visibility": "public",
+                "importance": 3,
+                "tags": script.tags,
+                "source": "scenario",
+            }
+        )
+    for index, hook in enumerate(script.hooks, start=1):
+        patches.append(
+            {
+                "op": "update_clue",
+                "clue_id": f"hook-{index}",
+                "title": hook,
+                "detail": hook,
+                "clue_status": "available",
+                "visibility": "private",
+                "importance": 3,
+                "tags": script.tags,
+                "source": "scenario",
+            }
+        )
+    apply_knowledge_patches(session, patches)
 
 
 def _script_list_payload(scripts: dict[str, ScenarioScript]) -> list[dict[str, Any]]:

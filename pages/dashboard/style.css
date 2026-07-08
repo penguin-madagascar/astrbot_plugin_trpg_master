@@ -201,6 +201,10 @@ button.danger:hover {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .field {
   display: grid;
   gap: 0.375rem;
@@ -266,6 +270,29 @@ textarea {
   gap: 0.5rem;
 }
 
+.knowledge-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.knowledge-item {
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+  background: var(--surface-muted);
+}
+
+.knowledge-item strong,
+.knowledge-item span {
+  display: block;
+}
+
+.knowledge-item span {
+  margin-top: 0.125rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
 .script-item {
   width: 100%;
   min-height: auto;
@@ -303,7 +330,8 @@ textarea {
 
 @media (max-width: 800px) {
   .layout,
-  .grid.two {
+  .grid.two,
+  .grid.three {
     grid-template-columns: 1fr;
   }
 

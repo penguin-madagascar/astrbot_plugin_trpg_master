@@ -17,6 +17,12 @@
     "hint": "超过后会尝试调用 LLM 更新 history_summary 并裁剪 recent_events。",
     "default": 20
   },
+  "max_timeline_events": {
+    "type": "int",
+    "description": "战役时间线上限",
+    "hint": "超过后会把低重要度旧事件归档到 campaign_knowledge.archive_summary，高重要度事件优先保留。",
+    "default": 80
+  },
   "max_turns": {
     "type": "int",
     "description": "最大回合数",
