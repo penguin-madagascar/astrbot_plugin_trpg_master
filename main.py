@@ -6,7 +6,8 @@ from typing import Any
 
 try:
     from astrbot.api import AstrBotConfig, logger
-    from astrbot.api.event import AstrMessageEvent, filter
+    from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+    from astrbot.api.message_components import Image
     from astrbot.api.star import Context, Star, StarTools, register
     from astrbot.core.star.filter.command import GreedyStr
 except ModuleNotFoundError:  # pragma: no cover - local syntax checks outside AstrBot.
@@ -15,6 +16,14 @@ except ModuleNotFoundError:  # pragma: no cover - local syntax checks outside As
     AstrMessageEvent = Any
     Context = Any
     GreedyStr = str
+
+    class MessageChain(list):
+        pass
+
+    class Image:
+        @staticmethod
+        def fromFileSystem(path: str | Path) -> str:
+            return str(path)
 
     class Star:
         def __init__(self, context: Any) -> None:
@@ -45,6 +54,7 @@ except ModuleNotFoundError:  # pragma: no cover - local syntax checks outside As
 
 try:
     from .dice import roll_d20_check, roll_dice
+    from .dice_gif import generate_dice_roll_gif
     from .export import export_session_markdown
     from .gm import call_gm, parse_structured_patch
     from .language import detect_language_from_theme
@@ -60,6 +70,7 @@ try:
     from .storage import SessionStorage
 except ImportError:  # pragma: no cover - direct module loading outside package.
     from dice import roll_d20_check, roll_dice
+    from dice_gif import generate_dice_roll_gif
     from export import export_session_markdown
     from gm import call_gm, parse_structured_patch
     from language import detect_language_from_theme
@@ -402,10 +413,25 @@ class LLMTRPGPlugin(Star):
                 yield event.plain_result(_msg(language, "roll_failed", error=str(exc)))
                 return
 
-            output = (
-                f"{_msg(language, 'roll_title')}: {result.expression}\n"
-                f"rolls={result.rolls}, modifier={result.modifier}, total={result.total}"
-            )
+            output = _format_roll_text(language, result)
+            try:
+                gif_path = generate_dice_roll_gif(result, self.data_dir / "dice_gifs")
+                chain_result = getattr(event, "chain_result", None)
+                if not callable(chain_result):
+                    raise RuntimeError("current AstrBot event does not support chain_result")
+                if session and session.status == "running":
+                    session.add_log(
+                        user=_sender_label(event),
+                        command="trpg_roll",
+                        input_text=expr,
+                        output_summary=f"GIF {gif_path.name}; {_one_line(output, 160)}",
+                    )
+                    await self.storage.save_session(session)
+                yield chain_result(MessageChain([Image.fromFileSystem(str(gif_path))]))
+                return
+            except Exception as exc:
+                logger.warning("TRPG dice GIF generation failed, using text fallback: %s", exc)
+
             if session and session.status == "running":
                 session.add_log(
                     user=_sender_label(event),
@@ -615,7 +641,7 @@ class LLMTRPGPlugin(Star):
                 "/trpg_pc - show your character sheet\n"
                 "/trpg_status - show session state\n"
                 "/trpg_act <action> - take an action\n"
-                "/trpg_roll <expr> - roll dice, e.g. 1d20+3\n"
+                "/trpg_roll <expr> - roll dice as a GIF, e.g. 1d20+3\n"
                 "/trpg_end - end the session\n"
                 "/trpg_export - export Markdown log"
             )
@@ -626,7 +652,7 @@ class LLMTRPGPlugin(Star):
             "/trpg_pc - 查看自己的角色卡\n"
             "/trpg_status - 查看当前跑团状态\n"
             "/trpg_act <行动内容> - 执行行动并推进剧情\n"
-            "/trpg_roll <表达式> - 掷骰，例如 1d20+3\n"
+            "/trpg_roll <表达式> - 生成 GIF 掷骰，例如 1d20+3\n"
             "/trpg_end - 结束当前跑团\n"
             "/trpg_export - 导出 Markdown 日志"
         )
@@ -636,6 +662,13 @@ def _msg(language: str, key: str, **kwargs: Any) -> str:
     table = MESSAGES.get(language, MESSAGES["zh"])
     template = table.get(key, MESSAGES["zh"][key])
     return template.format(**kwargs)
+
+
+def _format_roll_text(language: str, result: Any) -> str:
+    return (
+        f"{_msg(language, 'roll_title')}: {result.expression}\n"
+        f"rolls={result.rolls}, modifier={result.modifier}, total={result.total}"
+    )
 
 
 def _session_id(event: Any) -> str:
