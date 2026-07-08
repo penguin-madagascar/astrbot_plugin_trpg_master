@@ -13,9 +13,9 @@ except ModuleNotFoundError:  # pragma: no cover - tests outside AstrBot.
     logger = logging.getLogger(__name__)
 
 try:
-    from .models import CharacterPreset, GameSession
+    from .models import CharacterPreset, GameSession, ScenarioScript
 except ImportError:  # pragma: no cover - direct import outside package.
-    from models import CharacterPreset, GameSession
+    from models import CharacterPreset, GameSession, ScenarioScript
 
 
 class SessionStorage:
@@ -77,6 +77,41 @@ class SessionStorage:
             self._preset_file_put(owner_id, data)
             return
         self._preset_file_put(owner_id, data)
+
+    async def load_scenario_scripts(self) -> dict[str, ScenarioScript]:
+        data = await self._kv_get(self._scenario_scripts_key())
+        if data is None:
+            data = self._scenario_scripts_file_get()
+        if data is None:
+            return {}
+        if isinstance(data, str):
+            data = json.loads(data)
+        return {
+            str(script_id): ScenarioScript.from_dict(script)
+            for script_id, script in data.items()
+        }
+
+    async def save_scenario_scripts(
+        self,
+        scripts: dict[str, ScenarioScript],
+    ) -> None:
+        data = {script_id: script.to_dict() for script_id, script in scripts.items()}
+        if not await self._kv_put(self._scenario_scripts_key(), data):
+            self._scenario_scripts_file_put(data)
+            return
+        self._scenario_scripts_file_put(data)
+
+    async def find_scenario_script(self, query: str) -> ScenarioScript | None:
+        target = str(query or "").strip()
+        if not target:
+            return None
+        scripts = await self.load_scenario_scripts()
+        if target in scripts:
+            return scripts[target]
+        for script in scripts.values():
+            if script.title == target:
+                return script
+        return None
 
     async def _kv_get(self, key: str) -> Any | None:
         getter = getattr(self.context, "get_kv_data", None)
@@ -141,6 +176,22 @@ class SessionStorage:
         digest = hashlib.sha256(owner_id.encode("utf-8")).hexdigest()
         return self.presets_dir / f"{digest}.json"
 
+    def _scenario_scripts_file_get(self) -> dict[str, Any] | None:
+        path = self._scenario_scripts_file_path()
+        if not path.exists():
+            return None
+        with path.open("r", encoding="utf-8") as file:
+            return json.load(file)
+
+    def _scenario_scripts_file_put(self, data: dict[str, Any]) -> None:
+        path = self._scenario_scripts_file_path()
+        with path.open("w", encoding="utf-8", newline="\n") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+
+    def _scenario_scripts_file_path(self) -> Path:
+        return self.data_dir / "scenario_scripts.json"
+
     @staticmethod
     def _key(session_id: str) -> str:
         digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
@@ -150,6 +201,10 @@ class SessionStorage:
     def _preset_key(owner_id: str) -> str:
         digest = hashlib.sha256(owner_id.encode("utf-8")).hexdigest()
         return f"trpg_presets:{digest}"
+
+    @staticmethod
+    def _scenario_scripts_key() -> str:
+        return "trpg_scenario_scripts"
 
 
 async def _maybe_await(value: Any) -> Any:

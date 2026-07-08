@@ -85,14 +85,18 @@ def session_snapshot(session: GameSession) -> dict[str, Any]:
         "global_items": session.global_items,
         "history_summary": session.history_summary,
         "recent_events": session.recent_events,
+        "scenario_script": session.scenario_script,
     }
 
 
 def build_opening_prompt(session: GameSession) -> str:
     language = language_name(session.language)
+    scenario = _format_scenario_context(session.scenario_script)
+    scenario_part = f"\n剧本资料：\n{scenario}\n" if scenario else ""
     return (
         f"本次 session 的输出语言是 {language}。\n"
         f"主题：{session.theme}\n"
+        f"{scenario_part}"
         "请生成跑团开场，只输出面向玩家的叙事文本，不要输出 JSON。\n"
         "需要包含当前场景、主要威胁、可行动线索。不要给出固定选项，不要替玩家做决定。"
     )
@@ -144,3 +148,27 @@ def build_summary_prompt(session: GameSession) -> str:
         f"既有摘要：\n{session.history_summary or '(empty)'}\n\n"
         f"近期事件：\n{events}"
     )
+
+
+def _format_scenario_context(scenario: dict[str, Any] | None) -> str:
+    if not scenario:
+        return ""
+    lines = []
+    labels = [
+        ("title", "标题"),
+        ("summary", "简介"),
+        ("background", "背景"),
+        ("opening_scene", "开场场景"),
+        ("gm_notes", "GM 备注"),
+    ]
+    for key, label in labels:
+        value = str(scenario.get(key) or "").strip()
+        if value:
+            lines.append(f"{label}：{value}")
+    hooks = [str(item) for item in scenario.get("hooks", []) if str(item).strip()]
+    if hooks:
+        lines.append("线索：\n" + "\n".join(f"- {hook}" for hook in hooks))
+    tags = [str(item) for item in scenario.get("tags", []) if str(item).strip()]
+    if tags:
+        lines.append(f"标签：{', '.join(tags)}")
+    return "\n".join(lines)

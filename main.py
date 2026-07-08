@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +11,7 @@ try:
     from astrbot.api.event import AstrMessageEvent, MessageChain, filter
     from astrbot.api.message_components import Image
     from astrbot.api.star import Context, Star, StarTools, register
+    from astrbot.api.web import error_response, file_response, json_response, request
     from astrbot.core.star.filter.command import GreedyStr
 except ModuleNotFoundError:  # pragma: no cover - local syntax checks outside AstrBot.
     logger = logging.getLogger(__name__)
@@ -16,6 +19,25 @@ except ModuleNotFoundError:  # pragma: no cover - local syntax checks outside As
     AstrMessageEvent = Any
     Context = Any
     GreedyStr = str
+    request = None
+
+    def json_response(data: Any):
+        return data
+
+    def error_response(message: str, status_code: int = 400):
+        return {"status": "error", "message": message, "status_code": status_code}
+
+    def file_response(
+        path: str | Path,
+        *,
+        filename: str | None = None,
+        content_type: str = "application/octet-stream",
+    ):
+        return {
+            "path": str(path),
+            "filename": filename or Path(path).name,
+            "content_type": content_type,
+        }
 
     class MessageChain(list):
         pass
@@ -63,6 +85,8 @@ try:
         CharacterPreset,
         GameSession,
         PlayerCharacter,
+        ScenarioScript,
+        utc_now_iso,
     )
     from .prompts import (
         DEFAULT_GM_SYSTEM_PROMPT,
@@ -84,6 +108,8 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         CharacterPreset,
         GameSession,
         PlayerCharacter,
+        ScenarioScript,
+        utc_now_iso,
     )
     from prompts import (
         DEFAULT_GM_SYSTEM_PROMPT,
@@ -226,6 +252,7 @@ class LLMTRPGPlugin(Star):
         self.config = config or {}
         self.data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME)).resolve()
         self.storage = SessionStorage(context, self.data_dir)
+        self._register_web_apis()
 
     @filter.command("trpg_help", desc="显示 LLM TRPG 插件帮助。")
     async def trpg_help(self, event: AstrMessageEvent):
@@ -241,14 +268,25 @@ class LLMTRPGPlugin(Star):
     async def trpg_start(self, event: AstrMessageEvent, theme: GreedyStr = ""):
         raw_theme = str(theme or "").strip()
         default_theme = str(self.config.get("default_theme") or "奇幻冒险")
-        session_theme = raw_theme or default_theme
-        language = detect_language_from_theme(raw_theme) if raw_theme else "zh"
+        script = await self.storage.find_scenario_script(raw_theme) if raw_theme else None
+        session_title = script.title if script else (raw_theme or default_theme)
+        session_theme = script.theme if script else session_title
+        language = (
+            script.language
+            if script
+            else detect_language_from_theme(raw_theme) if raw_theme else "zh"
+        )
         session = GameSession.new(
             session_id=_session_id(event),
-            title=session_theme,
+            title=session_title,
             theme=session_theme,
             language=language,
         )
+        if script:
+            session.scenario_script = script.to_session_context()
+            session.history_summary = _scenario_history_summary(script)
+            session.scene["description"] = script.opening_scene
+            session.plot_threads.extend(script.hooks)
 
         try:
             opening = await call_gm(
@@ -654,6 +692,155 @@ class LLMTRPGPlugin(Star):
         await self.storage.save_presets(user_id, presets)
         return _msg(language, "preset_updated", name=name, change=change)
 
+    def _register_web_apis(self) -> None:
+        register_api = getattr(self.context, "register_web_api", None)
+        if not callable(register_api):
+            return
+        routes = [
+            (f"/{PLUGIN_NAME}/dashboard", self.web_dashboard, ["GET"], "TRPG dashboard"),
+            (
+                f"/{PLUGIN_NAME}/settings/save",
+                self.web_save_settings,
+                ["POST"],
+                "Save TRPG settings",
+            ),
+            (f"/{PLUGIN_NAME}/scripts", self.web_list_scripts, ["GET"], "List scripts"),
+            (
+                f"/{PLUGIN_NAME}/scripts/<script_id>",
+                self.web_get_script,
+                ["GET"],
+                "Get script",
+            ),
+            (
+                f"/{PLUGIN_NAME}/scripts/save",
+                self.web_save_script,
+                ["POST"],
+                "Save script",
+            ),
+            (
+                f"/{PLUGIN_NAME}/scripts/delete",
+                self.web_delete_script,
+                ["POST"],
+                "Delete script",
+            ),
+            (
+                f"/{PLUGIN_NAME}/scripts/import",
+                self.web_import_scripts,
+                ["POST"],
+                "Import scripts",
+            ),
+            (
+                f"/{PLUGIN_NAME}/scripts/export",
+                self.web_export_scripts,
+                ["GET"],
+                "Export scripts",
+            ),
+        ]
+        for route, handler, methods, desc in routes:
+            register_api(route, handler, methods, desc)
+
+    async def web_dashboard(self):
+        scripts = await self.storage.load_scenario_scripts()
+        return json_response(
+            {
+                "settings_schema": _load_config_schema(),
+                "settings": dict(self.config),
+                "scripts": _script_list_payload(scripts),
+            }
+        )
+
+    async def web_save_settings(self):
+        payload = await request.json(default={})
+        if not isinstance(payload, dict):
+            return error_response("settings payload must be an object", status_code=400)
+        updates = _coerce_config_updates(_load_config_schema(), payload)
+        self.config.update(updates)
+        saver = getattr(self.config, "save_config", None)
+        if callable(saver):
+            saver()
+        return json_response({"settings": dict(self.config)})
+
+    async def web_list_scripts(self):
+        scripts = await self.storage.load_scenario_scripts()
+        return json_response({"scripts": _script_list_payload(scripts)})
+
+    async def web_get_script(self, script_id: str):
+        scripts = await self.storage.load_scenario_scripts()
+        script = scripts.get(str(script_id))
+        if script is None:
+            return error_response("script not found", status_code=404)
+        return json_response({"script": script.to_dict()})
+
+    async def web_save_script(self):
+        payload = await request.json(default={})
+        if isinstance(payload, dict) and isinstance(payload.get("script"), dict):
+            payload = payload["script"]
+        if not isinstance(payload, dict):
+            return error_response("script payload must be an object", status_code=400)
+        scripts = await self.storage.load_scenario_scripts()
+        previous_created_at = payload.get("created_at")
+        script = ScenarioScript.from_dict(payload)
+        existing = scripts.get(script.script_id)
+        if existing and not previous_created_at:
+            script.created_at = existing.created_at
+        script.updated_at = _current_timestamp()
+        scripts[script.script_id] = script
+        await self.storage.save_scenario_scripts(scripts)
+        return json_response({"script": script.to_dict()})
+
+    async def web_delete_script(self):
+        payload = await request.json(default={})
+        script_id = str(payload.get("script_id") or "").strip() if isinstance(payload, dict) else ""
+        if not script_id:
+            return error_response("script_id is required", status_code=400)
+        scripts = await self.storage.load_scenario_scripts()
+        if script_id not in scripts:
+            return error_response("script not found", status_code=404)
+        del scripts[script_id]
+        await self.storage.save_scenario_scripts(scripts)
+        return json_response({"deleted": script_id})
+
+    async def web_import_scripts(self):
+        payload = await request.json(default={})
+        if not isinstance(payload, dict):
+            return error_response("import payload must be an object", status_code=400)
+        content = str(payload.get("content") or "")
+        filename = str(payload.get("filename") or "")
+        if not content.strip():
+            return error_response("content is required", status_code=400)
+        try:
+            imported = _parse_scenario_import(content, filename=filename)
+        except ValueError as exc:
+            return error_response(str(exc), status_code=400)
+        scripts = await self.storage.load_scenario_scripts()
+        for script in imported:
+            existing = scripts.get(script.script_id)
+            if existing:
+                script.created_at = existing.created_at
+            script.updated_at = _current_timestamp()
+            scripts[script.script_id] = script
+        await self.storage.save_scenario_scripts(scripts)
+        return json_response({"scripts": [script.to_dict() for script in imported]})
+
+    async def web_export_scripts(self):
+        scripts = await self.storage.load_scenario_scripts()
+        exports_dir = self.data_dir / "exports"
+        exports_dir.mkdir(parents=True, exist_ok=True)
+        path = exports_dir / "scenario_scripts.json"
+        with path.open("w", encoding="utf-8", newline="\n") as file:
+            json.dump(
+                [script.to_dict() for script in scripts.values()],
+                file,
+                ensure_ascii=False,
+                indent=2,
+            )
+            file.write("\n")
+        return file_response(
+            path,
+            filename="scenario_scripts.json",
+            content_type="application/json",
+        )
+
     def _gm_system_prompt(self) -> str:
         return str(self.config.get("gm_system_prompt") or DEFAULT_GM_SYSTEM_PROMPT)
 
@@ -928,6 +1115,170 @@ def _split_preset_list_value(value: str) -> list[str]:
     for separator in ("，", "、"):
         text = text.replace(separator, ",")
     return [item.strip() for item in text.split(",") if item.strip()]
+
+
+def _scenario_history_summary(script: ScenarioScript) -> str:
+    parts = [
+        f"剧本简介：{script.summary}" if script.summary else "",
+        f"剧本背景：{script.background}" if script.background else "",
+        f"GM 备注：{script.gm_notes}" if script.gm_notes else "",
+    ]
+    return "\n".join(part for part in parts if part)
+
+
+def _script_list_payload(scripts: dict[str, ScenarioScript]) -> list[dict[str, Any]]:
+    return [
+        script.to_dict()
+        for script in sorted(scripts.values(), key=lambda item: item.title)
+    ]
+
+
+def _parse_scenario_import(content: str, filename: str = "") -> list[ScenarioScript]:
+    text = str(content or "").strip()
+    if not text:
+        raise ValueError("导入内容不能为空。")
+    if filename.lower().endswith(".json") or text[0] in "[{":
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            if filename.lower().endswith(".json"):
+                raise ValueError("JSON 剧本格式无法解析。") from exc
+            return [_parse_markdown_scenario(text)]
+        if isinstance(payload, dict) and isinstance(payload.get("scripts"), list):
+            payload = payload["scripts"]
+        if isinstance(payload, list):
+            return [ScenarioScript.from_dict(item) for item in payload]
+        if isinstance(payload, dict):
+            return [ScenarioScript.from_dict(payload)]
+        raise ValueError("JSON 剧本必须是对象、对象数组或包含 scripts 数组的对象。")
+    return [_parse_markdown_scenario(text)]
+
+
+def _parse_markdown_scenario(markdown: str) -> ScenarioScript:
+    title = ""
+    sections: dict[str, list[str]] = {}
+    current = "gm_notes"
+    for raw_line in markdown.splitlines():
+        line = raw_line.rstrip()
+        heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+        if heading:
+            heading_text = heading.group(2).strip()
+            if heading.group(1) == "#" and not title:
+                title = heading_text
+                continue
+            current = _markdown_section_key(heading_text)
+            sections.setdefault(current, [])
+            continue
+        sections.setdefault(current, []).append(line)
+
+    if not title:
+        title = "导入剧本"
+    hooks = _markdown_list_items("\n".join(sections.get("hooks", [])))
+    tags = _split_preset_list_value(_section_text(sections, "tags"))
+    gm_notes = _section_text(sections, "gm_notes")
+    unknown = _section_text(sections, "unknown")
+    if unknown:
+        gm_notes = "\n\n".join(part for part in (gm_notes, unknown) if part)
+    return ScenarioScript(
+        script_id="",
+        title=title,
+        language=_section_text(sections, "language") or "zh",
+        theme=_section_text(sections, "theme") or title,
+        summary=_section_text(sections, "summary"),
+        background=_section_text(sections, "background"),
+        opening_scene=_section_text(sections, "opening_scene"),
+        hooks=hooks,
+        gm_notes=gm_notes,
+        tags=tags,
+    )
+
+
+def _markdown_section_key(value: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    mapping = {
+        "简介": "summary",
+        "summary": "summary",
+        "背景": "background",
+        "background": "background",
+        "开场": "opening_scene",
+        "开场场景": "opening_scene",
+        "opening": "opening_scene",
+        "opening scene": "opening_scene",
+        "opening_scene": "opening_scene",
+        "线索": "hooks",
+        "钩子": "hooks",
+        "hooks": "hooks",
+        "主题": "theme",
+        "theme": "theme",
+        "语言": "language",
+        "language": "language",
+        "标签": "tags",
+        "tags": "tags",
+        "gm 备注": "gm_notes",
+        "gm备注": "gm_notes",
+        "gm notes": "gm_notes",
+        "notes": "gm_notes",
+        "备注": "gm_notes",
+    }
+    return mapping.get(normalized, "unknown")
+
+
+def _section_text(sections: dict[str, list[str]], key: str) -> str:
+    lines = sections.get(key, [])
+    return "\n".join(line.strip() for line in lines).strip()
+
+
+def _markdown_list_items(value: str) -> list[str]:
+    items = []
+    for line in value.splitlines():
+        item = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s*", "", line).strip()
+        if item:
+            items.append(item)
+    return items
+
+
+def _coerce_config_updates(
+    schema: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    for key, definition in schema.items():
+        if key not in payload:
+            continue
+        field_type = str((definition or {}).get("type") or "string")
+        value = payload[key]
+        if field_type in {"string", "text"}:
+            updates[key] = str(value)
+        elif field_type == "int":
+            updates[key] = int(value)
+        elif field_type == "bool":
+            updates[key] = _coerce_bool(value)
+        else:
+            updates[key] = value
+    return updates
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
+def _load_config_schema() -> dict[str, Any]:
+    path = Path(__file__).with_name("_conf_schema.json")
+    with path.open("r", encoding="utf-8") as file:
+        data = json.load(file)
+    return data if isinstance(data, dict) else {}
+
+
+def _current_timestamp() -> str:
+    return utc_now_iso()
 
 
 def _session_id(event: Any) -> str:

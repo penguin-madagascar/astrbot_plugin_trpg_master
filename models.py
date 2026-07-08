@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 
 DEFAULT_ATTRIBUTES = {
@@ -122,6 +123,71 @@ class CharacterPreset:
 
 
 @dataclass
+class ScenarioScript:
+    script_id: str
+    title: str
+    language: str = "zh"
+    theme: str = ""
+    summary: str = ""
+    background: str = ""
+    opening_scene: str = ""
+    hooks: list[str] = field(default_factory=list)
+    gm_notes: str = ""
+    tags: list[str] = field(default_factory=list)
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+    def __post_init__(self) -> None:
+        self.title = str(self.title).strip()
+        self.script_id = str(self.script_id or _new_script_id()).strip()
+        self.language = str(self.language or "zh").strip() or "zh"
+        self.theme = str(self.theme or self.title).strip()
+        self.summary = str(self.summary or "").strip()
+        self.background = str(self.background or "").strip()
+        self.opening_scene = str(self.opening_scene or "").strip()
+        self.hooks = _string_list(self.hooks)
+        self.gm_notes = str(self.gm_notes or "").strip()
+        self.tags = _string_list(self.tags)
+        self.created_at = str(self.created_at or utc_now_iso())
+        self.updated_at = str(self.updated_at or self.created_at or utc_now_iso())
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ScenarioScript":
+        payload = dict(data)
+        title = str(payload.get("title") or payload.get("theme") or "未命名剧本")
+        created_at = str(payload.get("created_at") or utc_now_iso())
+        return cls(
+            script_id=str(payload.get("script_id") or payload.get("id") or _new_script_id()),
+            title=title,
+            language=str(payload.get("language") or "zh"),
+            theme=str(payload.get("theme") or title),
+            summary=str(payload.get("summary") or ""),
+            background=str(payload.get("background") or ""),
+            opening_scene=str(payload.get("opening_scene") or ""),
+            hooks=payload.get("hooks") or [],
+            gm_notes=str(payload.get("gm_notes") or ""),
+            tags=payload.get("tags") or [],
+            created_at=created_at,
+            updated_at=str(payload.get("updated_at") or created_at),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def to_session_context(self) -> dict[str, Any]:
+        return {
+            "script_id": self.script_id,
+            "title": self.title,
+            "summary": self.summary,
+            "background": self.background,
+            "opening_scene": self.opening_scene,
+            "hooks": list(self.hooks),
+            "gm_notes": self.gm_notes,
+            "tags": list(self.tags),
+        }
+
+
+@dataclass
 class NPC:
     name: str
     role: str = ""
@@ -204,6 +270,7 @@ class GameSession:
     history_summary: str = ""
     recent_events: list[str] = field(default_factory=list)
     logs: list[SessionLogEntry] = field(default_factory=list)
+    scenario_script: dict[str, Any] | None = None
 
     @classmethod
     def new(
@@ -237,6 +304,10 @@ class GameSession:
             SessionLogEntry.from_dict(item) for item in payload.get("logs", [])
         ]
         payload.setdefault("global_items", payload.pop("inventory", []))
+        scenario_script = payload.get("scenario_script")
+        payload["scenario_script"] = (
+            dict(scenario_script) if isinstance(scenario_script, dict) else None
+        )
         return cls(**payload)
 
     def to_dict(self) -> dict[str, Any]:
@@ -257,6 +328,7 @@ class GameSession:
             "history_summary": self.history_summary,
             "recent_events": list(self.recent_events),
             "logs": [entry.to_dict() for entry in self.logs],
+            "scenario_script": dict(self.scenario_script) if self.scenario_script else None,
         }
 
     def add_log(
@@ -281,3 +353,7 @@ class GameSession:
             if player.character_name == character_name:
                 return player
         return None
+
+
+def _new_script_id() -> str:
+    return uuid4().hex[:12]

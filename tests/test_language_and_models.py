@@ -1,5 +1,5 @@
 from language import detect_language_from_theme
-from models import CharacterPreset, GameSession, PlayerCharacter
+from models import CharacterPreset, GameSession, PlayerCharacter, ScenarioScript
 
 
 def test_detect_language_from_theme_uses_chinese_for_empty_or_uncertain_text():
@@ -90,3 +90,60 @@ def test_character_preset_to_player_character_clones_mutable_fields():
     assert preset.skills["潜行"] == 60
     assert preset.inventory == ["银钥匙"]
     assert preset.status_effects == ["警觉"]
+
+
+def test_scenario_script_serialization_restores_defaults_and_context():
+    script = ScenarioScript.from_dict(
+        {
+            "script_id": "fog-town",
+            "title": "雾镇",
+            "language": "zh",
+            "summary": "被浓雾封锁的小镇。",
+            "hooks": ["钟楼停摆", "旧井低语"],
+            "tags": ["民俗", "调查"],
+        }
+    )
+
+    assert script.script_id == "fog-town"
+    assert script.title == "雾镇"
+    assert script.theme == "雾镇"
+    assert script.background == ""
+    assert script.opening_scene == ""
+    assert script.hooks == ["钟楼停摆", "旧井低语"]
+    assert script.gm_notes == ""
+    assert script.tags == ["民俗", "调查"]
+    assert script.created_at
+    assert script.updated_at
+
+    restored = ScenarioScript.from_dict(script.to_dict())
+
+    assert restored == script
+    assert restored.to_session_context() == {
+        "script_id": "fog-town",
+        "title": "雾镇",
+        "summary": "被浓雾封锁的小镇。",
+        "background": "",
+        "opening_scene": "",
+        "hooks": ["钟楼停摆", "旧井低语"],
+        "gm_notes": "",
+        "tags": ["民俗", "调查"],
+    }
+
+
+def test_game_session_serialization_preserves_scenario_script_context():
+    script = ScenarioScript(
+        script_id="fog-town",
+        title="雾镇",
+        summary="被浓雾封锁的小镇。",
+    )
+    session = GameSession.new(
+        session_id="umo-1",
+        title=script.title,
+        theme=script.theme,
+        language=script.language,
+    )
+    session.scenario_script = script.to_session_context()
+
+    restored = GameSession.from_dict(session.to_dict())
+
+    assert restored.scenario_script == script.to_session_context()
