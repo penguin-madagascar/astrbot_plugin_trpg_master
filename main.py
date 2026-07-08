@@ -58,9 +58,21 @@ except ModuleNotFoundError:  # pragma: no cover - local syntax checks outside As
                 plugin_name or "astrbot_plugin_trpg_master"
             )
 
+    class _EventMessageType:
+        ALL = "all"
+
     class _Filter:
+        EventMessageType = _EventMessageType
+
         @staticmethod
         def command(*_args: Any, **_kwargs: Any):
+            def decorator(func: Any) -> Any:
+                return func
+
+            return decorator
+
+        @staticmethod
+        def event_message_type(*_args: Any, **_kwargs: Any):
             def decorator(func: Any) -> Any:
                 return func
 
@@ -78,7 +90,7 @@ try:
     from .dice import roll_d20_check, roll_dice
     from .dice_gif import generate_dice_roll_gif
     from .export import export_session_markdown
-    from .gm import call_gm, parse_structured_patch
+    from .gm import call_command_agent, call_gm, parse_structured_patch
     from .language import detect_language_from_theme
     from .memory import (
         apply_knowledge_patches,
@@ -99,6 +111,7 @@ try:
     from .prompts import (
         DEFAULT_GM_SYSTEM_PROMPT,
         build_action_prompt,
+        build_command_agent_prompt,
         build_opening_prompt,
         build_resolution_prompt,
         build_summary_prompt,
@@ -118,7 +131,7 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
     from dice import roll_d20_check, roll_dice
     from dice_gif import generate_dice_roll_gif
     from export import export_session_markdown
-    from gm import call_gm, parse_structured_patch
+    from gm import call_command_agent, call_gm, parse_structured_patch
     from language import detect_language_from_theme
     from memory import (
         apply_knowledge_patches,
@@ -139,6 +152,7 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
     from prompts import (
         DEFAULT_GM_SYSTEM_PROMPT,
         build_action_prompt,
+        build_command_agent_prompt,
         build_opening_prompt,
         build_resolution_prompt,
         build_summary_prompt,
@@ -160,6 +174,9 @@ PLUGIN_NAME = "astrbot_plugin_trpg_master"
 PLUGIN_VERSION = "0.1.0"
 PLUGIN_REPOSITORY = "https://github.com/penguin-madagascar/astrbot_plugin_trpg_master"
 PLUGIN_DESCRIPTION = "LLM 驱动的 TRPG/跑团插件，Python 负责骰子、规则判定、状态和日志。"
+COMMAND_AGENT_SYSTEM_PROMPT = (
+    "你是 TRPG 命令转换 Agent。只输出 JSON object，字段只能包含 command_line。"
+)
 
 
 MESSAGES = {
@@ -311,6 +328,72 @@ class LLMTRPGPlugin(Star):
         self.data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME)).resolve()
         self.storage = SessionStorage(context, self.data_dir)
         self._register_web_apis()
+
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
+    async def trpg_message_intercept(self, event: AstrMessageEvent):
+        session = await self._running_session(event)
+        if not session:
+            return
+
+        raw_message = _event_message_text(event)
+        stripped = raw_message.strip()
+        if stripped.startswith("/") and not stripped.lower().startswith("/trpg_"):
+            return
+        sender_id = _sender_id(event)
+        is_direct_trpg_command = stripped.lower().startswith("/trpg_")
+        command_agent_enabled = _config_bool(self.config, "command_agent_enabled", True)
+        if (
+            not is_direct_trpg_command
+            and not command_agent_enabled
+            and sender_id not in session.players
+        ):
+            return
+
+        _block_default_llm(event)
+        try:
+            if not stripped:
+                yield event.plain_result("无法处理空的跑团输入。")
+                return
+            if is_direct_trpg_command:
+                async for item in self._dispatch_trpg_message_command(event, stripped):
+                    yield item
+                return
+            if not command_agent_enabled:
+                async for item in self.trpg_act(event, stripped):
+                    yield item
+                return
+
+            try:
+                command_line = await self._command_agent_command_line(
+                    event,
+                    session,
+                    stripped,
+                )
+            except ValueError:
+                logger.warning("TRPG command agent returned invalid JSON")
+                yield event.plain_result("命令转换 Agent 返回无效 JSON。")
+                return
+            if not command_line:
+                if not self._command_agent_action_allowed(session, sender_id):
+                    yield event.plain_result("当前阶段不允许提交角色行动。")
+                    return
+                command_line = f"/trpg_act {stripped}"
+
+            error = self._validate_command_agent_line(
+                session,
+                sender_id,
+                command_line,
+            )
+            if error:
+                yield event.plain_result(error)
+                return
+            async for item in self._dispatch_trpg_message_command(event, command_line):
+                yield item
+        except Exception:
+            logger.exception("TRPG intercepted message handling failed")
+            yield event.plain_result("跑团输入处理失败。")
+        finally:
+            _stop_event(event)
 
     @filter.command("trpg_help", desc="显示 LLM TRPG 插件帮助。")
     async def trpg_help(self, event: AstrMessageEvent):
@@ -806,6 +889,131 @@ class LLMTRPGPlugin(Star):
         if session and session.status == "running":
             return session.language or "zh"
         return "zh"
+
+    async def _command_agent_command_line(
+        self,
+        event: AstrMessageEvent,
+        session: GameSession,
+        user_text: str,
+    ) -> str:
+        sender_id = _sender_id(event)
+        prompt = build_command_agent_prompt(
+            session,
+            sender_id=sender_id,
+            sender_name=_sender_name(event),
+            user_text=user_text,
+            allowed_commands=self._command_agent_allowed_commands(session, sender_id),
+        )
+        return await call_command_agent(
+            self.context,
+            event,
+            prompt=prompt,
+            system_prompt=COMMAND_AGENT_SYSTEM_PROMPT,
+        )
+
+    def _command_agent_allowed_commands(
+        self,
+        session: GameSession,
+        sender_id: str,
+    ) -> dict[str, str]:
+        commands = {
+            "/trpg_help": "显示 TRPG 帮助。",
+            "/trpg_status": "查看当前跑团状态。",
+            "/trpg_recap": "查看玩家可见的战役回顾。",
+            "/trpg_memory <关键词>": "搜索玩家可见的战役记忆。",
+            "/trpg_clues": "查看玩家可见线索。",
+            "/trpg_roll <表达式>": "掷基础骰子表达式。",
+        }
+        if sender_id not in session.players:
+            commands.update(
+                {
+                    "/trpg_join <角色名> <一句话设定>": "加入当前跑团并创建角色。",
+                    "/trpg_preset <子命令>": "管理自己的角色预设。",
+                }
+            )
+            return commands
+
+        commands["/trpg_pc"] = "查看自己的角色卡。"
+        commands["/trpg_end"] = "结束当前跑团；仅在玩家明确要求结束时使用。"
+        commands["/trpg_export"] = "导出当前跑团日志；仅在玩家明确要求导出时使用。"
+        if self._command_agent_action_allowed(session, sender_id):
+            commands["/trpg_act <行动内容>"] = "提交当前角色行动。"
+        if is_turn_order_active(session) and is_current_turn(session, sender_id):
+            commands["/trpg_turn done"] = "当前行动者结束自己的行动并推进顺序。"
+            commands["/trpg_turn next"] = "当前行动者推进到下一位行动者。"
+        return commands
+
+    def _command_agent_action_allowed(self, session: GameSession, sender_id: str) -> bool:
+        if sender_id not in session.players:
+            return False
+        return not is_turn_order_active(session) or is_current_turn(session, sender_id)
+
+    def _validate_command_agent_line(
+        self,
+        session: GameSession,
+        sender_id: str,
+        command_line: str,
+    ) -> str:
+        command_token, rest = _split_first(str(command_line or "").strip())
+        command_name = (
+            command_token[1:].lower()
+            if command_token.startswith("/")
+            else command_token.lower()
+        )
+        if not command_token.startswith("/trpg_"):
+            return f"当前阶段不允许执行该 TRPG 命令：{command_token or command_line}"
+        allowed_names = {
+            _split_first(command)[0][1:].lower()
+            for command in self._command_agent_allowed_commands(session, sender_id)
+        }
+        if command_name not in allowed_names:
+            return f"当前阶段不允许执行该 TRPG 命令：/{command_name}"
+        requires_args = {
+            "trpg_act",
+            "trpg_join",
+            "trpg_memory",
+            "trpg_roll",
+            "trpg_preset",
+        }
+        if command_name in requires_args and not rest:
+            return f"TRPG 命令缺少必要参数：/{command_name}"
+        if command_name == "trpg_turn" and rest.lower() not in {"done", "next"}:
+            return "TRPG 命令参数不合法：/trpg_turn"
+        return ""
+
+    async def _dispatch_trpg_message_command(
+        self,
+        event: AstrMessageEvent,
+        raw_message: str,
+    ):
+        command_token, rest = _split_first(raw_message)
+        command_name = (
+            command_token[1:].lower()
+            if command_token.startswith("/")
+            else command_token.lower()
+        )
+        command_handlers = {
+            "trpg_help": lambda: self.trpg_help(event),
+            "trpg_start": lambda: self.trpg_start(event, rest),
+            "trpg_join": lambda: self.trpg_join(event, rest),
+            "trpg_preset": lambda: self.trpg_preset(event, rest),
+            "trpg_pc": lambda: self.trpg_pc(event),
+            "trpg_status": lambda: self.trpg_status(event),
+            "trpg_turn": lambda: self.trpg_turn(event, rest),
+            "trpg_recap": lambda: self.trpg_recap(event),
+            "trpg_memory": lambda: self.trpg_memory(event, rest),
+            "trpg_clues": lambda: self.trpg_clues(event),
+            "trpg_act": lambda: self.trpg_act(event, rest),
+            "trpg_roll": lambda: self.trpg_roll(event, rest),
+            "trpg_end": lambda: self.trpg_end(event),
+            "trpg_export": lambda: self.trpg_export(event),
+        }
+        handler_factory = command_handlers.get(command_name)
+        if handler_factory is None:
+            yield event.plain_result(f"未知 TRPG 命令：{command_token}")
+            return
+        async for item in handler_factory():
+            yield item
 
     async def _preset_create(
         self,
@@ -1715,6 +1923,29 @@ def _sender_name(event: Any) -> str:
 
 def _sender_label(event: Any) -> str:
     return f"{_sender_name(event)}({_sender_id(event)})"
+
+
+def _event_message_text(event: Any) -> str:
+    getter = getattr(event, "get_message_str", None)
+    if callable(getter):
+        value = getter()
+    else:
+        value = getattr(event, "message_str", "")
+    return str(value or "")
+
+
+def _block_default_llm(event: Any) -> None:
+    blocker = getattr(event, "should_call_llm", None)
+    if callable(blocker):
+        blocker(True)
+        return
+    setattr(event, "call_llm", True)
+
+
+def _stop_event(event: Any) -> None:
+    stopper = getattr(event, "stop_event", None)
+    if callable(stopper):
+        stopper()
 
 
 def _split_first(value: str) -> tuple[str, str]:

@@ -53,6 +53,12 @@
     "hint": "开启后 /trpg_act 只解析 fenced JSON；解析失败不会应用状态变更。",
     "default": true
   },
+  "command_agent_enabled": {
+    "type": "bool",
+    "description": "启用跑团命令转换 Agent",
+    "hint": "跑团运行中将玩家自然语言转换为当前阶段可执行的 /trpg_* 命令；外部 / 命令不受影响。",
+    "default": true
+  },
   "turn_order_enabled": {
     "type": "bool",
     "description": "启用多人行动顺序",

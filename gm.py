@@ -39,6 +39,26 @@ async def call_gm(
     return str(getattr(response, "completion_text", "") or "").strip()
 
 
+async def call_command_agent(
+    context: Any,
+    event: Any,
+    *,
+    prompt: str,
+    system_prompt: str,
+) -> str:
+    kwargs: dict[str, Any] = {
+        "prompt": prompt,
+        "system_prompt": system_prompt,
+    }
+    provider_id = await resolve_provider_id(context, event)
+    if provider_id:
+        kwargs["chat_provider_id"] = provider_id
+    response = await context.llm_generate(**kwargs)
+    return parse_command_agent_response(
+        str(getattr(response, "completion_text", "") or "")
+    )
+
+
 async def resolve_provider_id(context: Any, event: Any) -> str:
     getter = getattr(context, "get_current_chat_provider_id", None)
     if not callable(getter):
@@ -76,6 +96,16 @@ def parse_structured_patch(text: str, *, strict: bool = True) -> ParsedGMRespons
     if not isinstance(patch, dict):
         raise ValueError("GM patch must be a JSON object")
     return ParsedGMResponse(narrative=narrative, patch=normalize_patch(patch))
+
+
+def parse_command_agent_response(text: str) -> str:
+    content = str(text or "").strip()
+    data = json.loads(content)
+    if not isinstance(data, dict):
+        raise ValueError("command agent response must be a JSON object")
+    if "command_line" not in data:
+        raise ValueError("command agent response missing command_line")
+    return str(data.get("command_line") or "").strip()
 
 
 def normalize_patch(patch: dict[str, Any]) -> dict[str, Any]:
