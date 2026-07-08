@@ -30,6 +30,14 @@ def _string_list(values: list[Any] | None) -> list[str]:
     return [str(item) for item in (values or [])]
 
 
+def _knowledge_importance(value: Any, default: int = 3) -> int:
+    try:
+        importance = int(value)
+    except (TypeError, ValueError):
+        importance = default
+    return min(5, max(1, importance))
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -294,6 +302,372 @@ class SessionLogEntry:
 
 
 @dataclass
+class TimelineEvent:
+    event_id: str
+    summary: str
+    visibility: str = "public"
+    importance: int = 3
+    status: str = "active"
+    turn: int = 0
+    scene: str = ""
+    entities: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        self.event_id = str(self.event_id or _new_knowledge_id()).strip()
+        self.summary = str(self.summary or "").strip()
+        self.visibility = str(self.visibility or "public")
+        self.importance = _knowledge_importance(self.importance)
+        self.status = str(self.status or "active")
+        self.turn = int(self.turn or 0)
+        self.scene = str(self.scene or "")
+        self.entities = _string_list(self.entities)
+        self.tags = _string_list(self.tags)
+        self.source = str(self.source or "")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TimelineEvent":
+        payload = dict(data)
+        return cls(
+            event_id=str(payload.get("event_id") or payload.get("id") or ""),
+            summary=str(payload.get("summary") or payload.get("text") or ""),
+            visibility=str(payload.get("visibility") or "public"),
+            importance=payload.get("importance", 3),
+            status=str(payload.get("status") or "active"),
+            turn=int(payload.get("turn", 0) or 0),
+            scene=str(payload.get("scene") or ""),
+            entities=payload.get("entities") or [],
+            tags=payload.get("tags") or [],
+            source=str(payload.get("source") or ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class KnowledgeEntity:
+    entity_id: str
+    name: str
+    kind: str = "entity"
+    aliases: list[str] = field(default_factory=list)
+    summary: str = ""
+    visibility: str = "public"
+    importance: int = 3
+    status: str = "active"
+    turn: int = 0
+    scene: str = ""
+    entities: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        self.entity_id = str(self.entity_id or _new_knowledge_id()).strip()
+        self.name = str(self.name or self.entity_id).strip()
+        self.kind = str(self.kind or "entity").strip()
+        self.aliases = _string_list(self.aliases)
+        self.summary = str(self.summary or "").strip()
+        self.visibility = str(self.visibility or "public")
+        self.importance = _knowledge_importance(self.importance)
+        self.status = str(self.status or "active")
+        self.turn = int(self.turn or 0)
+        self.scene = str(self.scene or "")
+        self.entities = _string_list(self.entities)
+        self.tags = _string_list(self.tags)
+        self.source = str(self.source or "")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "KnowledgeEntity":
+        payload = dict(data)
+        return cls(
+            entity_id=str(payload.get("entity_id") or payload.get("id") or ""),
+            name=str(payload.get("name") or ""),
+            kind=str(payload.get("kind") or "entity"),
+            aliases=payload.get("aliases") or [],
+            summary=str(payload.get("summary") or ""),
+            visibility=str(payload.get("visibility") or "public"),
+            importance=payload.get("importance", 3),
+            status=str(payload.get("status") or "active"),
+            turn=int(payload.get("turn", 0) or 0),
+            scene=str(payload.get("scene") or ""),
+            entities=payload.get("entities") or [],
+            tags=payload.get("tags") or [],
+            source=str(payload.get("source") or ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class KnowledgeFact:
+    fact_id: str
+    text: str
+    visibility: str = "public"
+    importance: int = 3
+    status: str = "active"
+    turn: int = 0
+    scene: str = ""
+    entities: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        self.fact_id = str(self.fact_id or _new_knowledge_id()).strip()
+        self.text = str(self.text or "").strip()
+        self.visibility = str(self.visibility or "public")
+        self.importance = _knowledge_importance(self.importance)
+        self.status = str(self.status or "active")
+        self.turn = int(self.turn or 0)
+        self.scene = str(self.scene or "")
+        self.entities = _string_list(self.entities)
+        self.tags = _string_list(self.tags)
+        self.source = str(self.source or "")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "KnowledgeFact":
+        payload = dict(data)
+        return cls(
+            fact_id=str(payload.get("fact_id") or payload.get("id") or ""),
+            text=str(payload.get("text") or ""),
+            visibility=str(payload.get("visibility") or "public"),
+            importance=payload.get("importance", 3),
+            status=str(payload.get("status") or "active"),
+            turn=int(payload.get("turn", 0) or 0),
+            scene=str(payload.get("scene") or ""),
+            entities=payload.get("entities") or [],
+            tags=payload.get("tags") or [],
+            source=str(payload.get("source") or ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class KnowledgeClue:
+    clue_id: str
+    title: str
+    detail: str = ""
+    clue_status: str = "available"
+    visibility: str = "public"
+    importance: int = 3
+    status: str = "active"
+    turn: int = 0
+    scene: str = ""
+    entities: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        self.clue_id = str(self.clue_id or _new_knowledge_id()).strip()
+        self.title = str(self.title or self.clue_id).strip()
+        self.detail = str(self.detail or "").strip()
+        self.clue_status = str(self.clue_status or "available")
+        self.visibility = str(self.visibility or "public")
+        self.importance = _knowledge_importance(self.importance)
+        self.status = str(self.status or "active")
+        self.turn = int(self.turn or 0)
+        self.scene = str(self.scene or "")
+        self.entities = _string_list(self.entities)
+        self.tags = _string_list(self.tags)
+        self.source = str(self.source or "")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "KnowledgeClue":
+        payload = dict(data)
+        return cls(
+            clue_id=str(payload.get("clue_id") or payload.get("id") or ""),
+            title=str(payload.get("title") or ""),
+            detail=str(payload.get("detail") or ""),
+            clue_status=str(payload.get("clue_status") or "available"),
+            visibility=str(payload.get("visibility") or "public"),
+            importance=payload.get("importance", 3),
+            status=str(payload.get("status") or "active"),
+            turn=int(payload.get("turn", 0) or 0),
+            scene=str(payload.get("scene") or ""),
+            entities=payload.get("entities") or [],
+            tags=payload.get("tags") or [],
+            source=str(payload.get("source") or ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class KnowledgeThread:
+    thread_id: str
+    title: str
+    summary: str = ""
+    thread_status: str = "active"
+    visibility: str = "public"
+    importance: int = 3
+    status: str = "active"
+    turn: int = 0
+    scene: str = ""
+    entities: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        self.thread_id = str(self.thread_id or _new_knowledge_id()).strip()
+        self.title = str(self.title or self.thread_id).strip()
+        self.summary = str(self.summary or "").strip()
+        self.thread_status = str(self.thread_status or "active")
+        self.visibility = str(self.visibility or "public")
+        self.importance = _knowledge_importance(self.importance)
+        self.status = str(self.status or "active")
+        self.turn = int(self.turn or 0)
+        self.scene = str(self.scene or "")
+        self.entities = _string_list(self.entities)
+        self.tags = _string_list(self.tags)
+        self.source = str(self.source or "")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "KnowledgeThread":
+        payload = dict(data)
+        return cls(
+            thread_id=str(payload.get("thread_id") or payload.get("id") or ""),
+            title=str(payload.get("title") or ""),
+            summary=str(payload.get("summary") or ""),
+            thread_status=str(payload.get("thread_status") or "active"),
+            visibility=str(payload.get("visibility") or "public"),
+            importance=payload.get("importance", 3),
+            status=str(payload.get("status") or "active"),
+            turn=int(payload.get("turn", 0) or 0),
+            scene=str(payload.get("scene") or ""),
+            entities=payload.get("entities") or [],
+            tags=payload.get("tags") or [],
+            source=str(payload.get("source") or ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class KnowledgeRelationship:
+    relationship_id: str
+    source: str
+    target: str
+    description: str
+    visibility: str = "public"
+    importance: int = 3
+    status: str = "active"
+    turn: int = 0
+    scene: str = ""
+    entities: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    source_note: str = ""
+
+    def __post_init__(self) -> None:
+        self.relationship_id = str(self.relationship_id or _new_knowledge_id()).strip()
+        self.source = str(self.source or "").strip()
+        self.target = str(self.target or "").strip()
+        self.description = str(self.description or "").strip()
+        self.visibility = str(self.visibility or "public")
+        self.importance = _knowledge_importance(self.importance)
+        self.status = str(self.status or "active")
+        self.turn = int(self.turn or 0)
+        self.scene = str(self.scene or "")
+        self.entities = _string_list(self.entities)
+        self.tags = _string_list(self.tags)
+        self.source_note = str(self.source_note or "")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "KnowledgeRelationship":
+        payload = dict(data)
+        return cls(
+            relationship_id=str(payload.get("relationship_id") or payload.get("id") or ""),
+            source=str(payload.get("source") or ""),
+            target=str(payload.get("target") or ""),
+            description=str(payload.get("description") or ""),
+            visibility=str(payload.get("visibility") or "public"),
+            importance=payload.get("importance", 3),
+            status=str(payload.get("status") or "active"),
+            turn=int(payload.get("turn", 0) or 0),
+            scene=str(payload.get("scene") or ""),
+            entities=payload.get("entities") or [],
+            tags=payload.get("tags") or [],
+            source_note=str(payload.get("source_note") or ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class CampaignKnowledge:
+    timeline: list[TimelineEvent] = field(default_factory=list)
+    entities: dict[str, KnowledgeEntity] = field(default_factory=dict)
+    facts: list[KnowledgeFact] = field(default_factory=list)
+    clues: dict[str, KnowledgeClue] = field(default_factory=dict)
+    threads: dict[str, KnowledgeThread] = field(default_factory=dict)
+    relationships: list[KnowledgeRelationship] = field(default_factory=list)
+    archive_summary: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "CampaignKnowledge":
+        payload = dict(data or {})
+        return cls(
+            timeline=[
+                TimelineEvent.from_dict(item)
+                for item in payload.get("timeline", [])
+                if isinstance(item, dict)
+            ],
+            entities={
+                str(entity_id): KnowledgeEntity.from_dict(entity)
+                for entity_id, entity in payload.get("entities", {}).items()
+                if isinstance(entity, dict)
+            },
+            facts=[
+                KnowledgeFact.from_dict(item)
+                for item in payload.get("facts", [])
+                if isinstance(item, dict)
+            ],
+            clues={
+                str(clue_id): KnowledgeClue.from_dict(clue)
+                for clue_id, clue in payload.get("clues", {}).items()
+                if isinstance(clue, dict)
+            },
+            threads={
+                str(thread_id): KnowledgeThread.from_dict(thread)
+                for thread_id, thread in payload.get("threads", {}).items()
+                if isinstance(thread, dict)
+            },
+            relationships=[
+                KnowledgeRelationship.from_dict(item)
+                for item in payload.get("relationships", [])
+                if isinstance(item, dict)
+            ],
+            archive_summary=str(payload.get("archive_summary") or ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timeline": [entry.to_dict() for entry in self.timeline],
+            "entities": {
+                entity_id: entity.to_dict()
+                for entity_id, entity in self.entities.items()
+            },
+            "facts": [fact.to_dict() for fact in self.facts],
+            "clues": {
+                clue_id: clue.to_dict() for clue_id, clue in self.clues.items()
+            },
+            "threads": {
+                thread_id: thread.to_dict()
+                for thread_id, thread in self.threads.items()
+            },
+            "relationships": [
+                relationship.to_dict() for relationship in self.relationships
+            ],
+            "archive_summary": self.archive_summary,
+        }
+
+
+@dataclass
 class GameSession:
     session_id: str
     title: str
@@ -311,6 +685,7 @@ class GameSession:
     logs: list[SessionLogEntry] = field(default_factory=list)
     scenario_script: dict[str, Any] | None = None
     turn_order: TurnOrderState = field(default_factory=TurnOrderState)
+    campaign_knowledge: CampaignKnowledge = field(default_factory=CampaignKnowledge)
 
     @classmethod
     def new(
@@ -349,6 +724,9 @@ class GameSession:
             dict(scenario_script) if isinstance(scenario_script, dict) else None
         )
         payload["turn_order"] = TurnOrderState.from_dict(payload.get("turn_order"))
+        payload["campaign_knowledge"] = CampaignKnowledge.from_dict(
+            payload.get("campaign_knowledge")
+        )
         return cls(**payload)
 
     def to_dict(self) -> dict[str, Any]:
@@ -371,6 +749,7 @@ class GameSession:
             "logs": [entry.to_dict() for entry in self.logs],
             "scenario_script": dict(self.scenario_script) if self.scenario_script else None,
             "turn_order": self.turn_order.to_dict(),
+            "campaign_knowledge": self.campaign_knowledge.to_dict(),
         }
 
     def add_log(
@@ -398,4 +777,8 @@ class GameSession:
 
 
 def _new_script_id() -> str:
+    return uuid4().hex[:12]
+
+
+def _new_knowledge_id() -> str:
     return uuid4().hex[:12]
