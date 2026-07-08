@@ -58,7 +58,12 @@ try:
     from .export import export_session_markdown
     from .gm import call_gm, parse_structured_patch
     from .language import detect_language_from_theme
-    from .models import GameSession, PlayerCharacter
+    from .models import (
+        DEFAULT_ATTRIBUTES,
+        CharacterPreset,
+        GameSession,
+        PlayerCharacter,
+    )
     from .prompts import (
         DEFAULT_GM_SYSTEM_PROMPT,
         build_action_prompt,
@@ -74,7 +79,12 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
     from export import export_session_markdown
     from gm import call_gm, parse_structured_patch
     from language import detect_language_from_theme
-    from models import GameSession, PlayerCharacter
+    from models import (
+        DEFAULT_ATTRIBUTES,
+        CharacterPreset,
+        GameSession,
+        PlayerCharacter,
+    )
     from prompts import (
         DEFAULT_GM_SYSTEM_PROMPT,
         build_action_prompt,
@@ -100,6 +110,7 @@ MESSAGES = {
         "joined": "角色已加入：{name}（HP {hp} / SAN {san}）",
         "not_joined": "你还没有加入当前跑团，请先使用 /trpg_join 角色名 一句话设定。",
         "pc_title": "角色卡",
+        "preset_title": "角色预设",
         "status_title": "跑团状态",
         "act_usage": "用法：/trpg_act 行动内容",
         "json_failed": "本回合未应用状态变更：GM 返回的 JSON 无法解析。",
@@ -121,6 +132,7 @@ MESSAGES = {
         "joined": "Character joined: {name} (HP {hp} / SAN {san})",
         "not_joined": "You have not joined this session. Use /trpg_join character_name one-line concept first.",
         "pc_title": "Character Sheet",
+        "preset_title": "Character Preset",
         "status_title": "Session Status",
         "act_usage": "Usage: /trpg_act action",
         "json_failed": "No state changes were applied this turn: the GM JSON could not be parsed.",
@@ -142,6 +154,7 @@ MESSAGES = {
         "joined": "キャラクターが参加しました：{name}（HP {hp} / SAN {san}）",
         "not_joined": "まだこのセッションに参加していません。先に /trpg_join を使ってください。",
         "pc_title": "キャラクターシート",
+        "preset_title": "キャラクタープリセット",
         "status_title": "セッション状況",
         "act_usage": "使い方：/trpg_act 行動内容",
         "json_failed": "GM の JSON を解析できなかったため、このターンの状態変更は適用されませんでした。",
@@ -163,6 +176,7 @@ MESSAGES = {
         "joined": "캐릭터가 참가했습니다: {name} (HP {hp} / SAN {san})",
         "not_joined": "아직 이 세션에 참가하지 않았습니다. 먼저 /trpg_join 을 사용하세요.",
         "pc_title": "캐릭터 시트",
+        "preset_title": "캐릭터 프리셋",
         "status_title": "세션 상태",
         "act_usage": "사용법: /trpg_act 행동 내용",
         "json_failed": "GM JSON을 해석할 수 없어 이번 턴의 상태 변경은 적용되지 않았습니다.",
@@ -669,6 +683,92 @@ def _format_roll_text(language: str, result: Any) -> str:
         f"{_msg(language, 'roll_title')}: {result.expression}\n"
         f"rolls={result.rolls}, modifier={result.modifier}, total={result.total}"
     )
+
+
+def _format_preset(language: str, preset: CharacterPreset) -> str:
+    attrs = ", ".join(f"{key} {value}" for key, value in preset.attributes.items())
+    skills = ", ".join(f"{key} {value}" for key, value in preset.skills.items()) or "-"
+    inventory = ", ".join(preset.inventory) if preset.inventory else "-"
+    status = ", ".join(preset.status_effects) if preset.status_effects else "-"
+    return (
+        f"{_msg(language, 'preset_title')}: {preset.name}\n"
+        f"Character: {preset.character_name}\n"
+        f"Concept: {preset.concept}\n"
+        f"HP: {preset.hp} / SAN: {preset.san}\n"
+        f"Attributes: {attrs}\n"
+        f"Skills: {skills}\n"
+        f"Inventory: {inventory}\n"
+        f"Status: {status}"
+    )
+
+
+def _apply_preset_update(
+    preset: CharacterPreset,
+    field_name: str,
+    raw_value: str,
+) -> str:
+    field = str(field_name or "").strip()
+    value = str(raw_value or "").strip()
+    field_lower = field.lower()
+    field_upper = field.upper()
+    if not field:
+        raise ValueError("属性名称不能为空。")
+
+    if field_lower in {"name", "character_name"}:
+        if not value:
+            raise ValueError("角色名不能为空。")
+        preset.character_name = value
+        return f"character_name={value}"
+    if field_lower == "concept":
+        if not value:
+            raise ValueError("设定不能为空。")
+        preset.concept = value
+        return f"concept={value}"
+    if field_lower == "hp":
+        preset.hp = _parse_update_int(value, "hp")
+        return f"hp={preset.hp}"
+    if field_lower == "san":
+        preset.san = _parse_update_int(value, "san")
+        return f"san={preset.san}"
+    if field_upper in DEFAULT_ATTRIBUTES:
+        preset.attributes[field_upper] = _parse_update_int(value, field_upper)
+        return f"{field_upper}={preset.attributes[field_upper]}"
+    if field_lower.startswith("attr."):
+        attr_name = field[5:].strip().upper()
+        if not attr_name:
+            raise ValueError("属性名称不能为空。")
+        preset.attributes[attr_name] = _parse_update_int(value, attr_name)
+        return f"{attr_name}={preset.attributes[attr_name]}"
+    if field_lower.startswith("skill."):
+        skill_name = field[6:].strip()
+        if not skill_name:
+            raise ValueError("技能名称不能为空。")
+        preset.skills[skill_name] = _parse_update_int(value, skill_name)
+        return f"{skill_name}={preset.skills[skill_name]}"
+    if field_lower == "inventory":
+        preset.inventory = _split_preset_list_value(value)
+        return f"inventory={', '.join(preset.inventory) or '-'}"
+    if field_lower in {"status", "status_effects"}:
+        preset.status_effects = _split_preset_list_value(value)
+        return f"status={', '.join(preset.status_effects) or '-'}"
+
+    raise ValueError(f"不支持的属性名称：{field}")
+
+
+def _parse_update_int(value: str, field_name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} 必须是整数。") from exc
+
+
+def _split_preset_list_value(value: str) -> list[str]:
+    text = str(value or "").strip()
+    if text == "-":
+        return []
+    for separator in ("，", "、"):
+        text = text.replace(separator, ",")
+    return [item.strip() for item in text.split(",") if item.strip()]
 
 
 def _session_id(event: Any) -> str:
