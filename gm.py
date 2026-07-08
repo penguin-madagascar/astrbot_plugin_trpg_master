@@ -85,6 +85,7 @@ def normalize_patch(patch: dict[str, Any]) -> dict[str, Any]:
         "scene_patch": patch.get("scene_patch")
         if isinstance(patch.get("scene_patch"), dict)
         else {},
+        "knowledge_patches": _list_of_dicts(patch.get("knowledge_patches")),
         "new_plot_threads": [str(item) for item in patch.get("new_plot_threads", [])],
         "memory_notes": [str(item) for item in patch.get("memory_notes", [])],
     }

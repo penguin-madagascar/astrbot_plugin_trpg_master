@@ -80,6 +80,14 @@ try:
     from .export import export_session_markdown
     from .gm import call_gm, parse_structured_patch
     from .language import detect_language_from_theme
+    from .memory import (
+        apply_knowledge_patches,
+        compact_campaign_knowledge,
+        format_campaign_recap,
+        player_visible_clues,
+        record_turn_timeline_event,
+        search_campaign_memory,
+    )
     from .models import (
         DEFAULT_ATTRIBUTES,
         CharacterPreset,
@@ -115,6 +123,14 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
     from export import export_session_markdown
     from gm import call_gm, parse_structured_patch
     from language import detect_language_from_theme
+    from memory import (
+        apply_knowledge_patches,
+        compact_campaign_knowledge,
+        format_campaign_recap,
+        player_visible_clues,
+        record_turn_timeline_event,
+        search_campaign_memory,
+    )
     from models import (
         DEFAULT_ATTRIBUTES,
         CharacterPreset,
@@ -183,6 +199,13 @@ MESSAGES = {
         "turn_denied_done": "只有当前行动者或 GM 可以结束当前行动。",
         "turn_target_not_found": "未找到行动顺序目标：{target}",
         "turn_out_of_order": "行动顺序提示：当前建议行动者是 {current}。",
+        "memory_usage": "用法：/trpg_memory 关键词",
+        "memory_empty": "没有找到可见的战役记忆。",
+        "memory_title": "战役记忆",
+        "clues_empty": "当前没有可见线索。",
+        "clues_title": "可见线索",
+        "memory_fix_usage": "用法：/trpg_memory_fix add 记忆内容 | pin 记忆ID | obsolete 记忆ID",
+        "memory_fixed": "战役记忆已更新。",
         "json_failed": "本回合未应用状态变更：GM 返回的 JSON 无法解析。",
         "roll_failed": "骰子表达式错误：{error}",
         "ended": "跑团已结束，日志已保留。",
@@ -225,6 +248,13 @@ MESSAGES = {
         "turn_denied_done": "Only the current actor or GM can end the current turn.",
         "turn_target_not_found": "Turn order target not found: {target}",
         "turn_out_of_order": "Turn order note: the current suggested actor is {current}.",
+        "memory_usage": "Usage: /trpg_memory keyword",
+        "memory_empty": "No visible campaign memory found.",
+        "memory_title": "Campaign Memory",
+        "clues_empty": "No visible clues yet.",
+        "clues_title": "Visible Clues",
+        "memory_fix_usage": "Usage: /trpg_memory_fix add memory | pin memory_id | obsolete memory_id",
+        "memory_fixed": "Campaign memory updated.",
         "json_failed": "No state changes were applied this turn: the GM JSON could not be parsed.",
         "roll_failed": "Invalid dice expression: {error}",
         "ended": "Session ended. Logs were kept.",
@@ -607,6 +637,109 @@ class LLMTRPGPlugin(Star):
             logger.exception("TRPG turn command failed")
             yield event.plain_result("行动顺序操作失败，请稍后重试。")
 
+    @filter.command("trpg_recap", desc="查看玩家可见的战役回顾。")
+    async def trpg_recap(self, event: AstrMessageEvent):
+        try:
+            session = await self._running_session(event)
+            if not session:
+                yield event.plain_result(_msg("zh", "no_session"))
+                return
+            yield event.plain_result(format_campaign_recap(session, visibility="player"))
+        except Exception:
+            logger.exception("TRPG recap command failed")
+            yield event.plain_result("战役回顾读取失败，请稍后重试。")
+
+    @filter.command("trpg_memory", desc="搜索玩家可见的战役记忆。")
+    async def trpg_memory(self, event: AstrMessageEvent, query: GreedyStr = ""):
+        try:
+            session = await self._running_session(event)
+            if not session:
+                yield event.plain_result(_msg("zh", "no_session"))
+                return
+            keyword = str(query or "").strip()
+            if not keyword:
+                yield event.plain_result(_msg(session.language, "memory_usage"))
+                return
+            results = search_campaign_memory(
+                session,
+                query=keyword,
+                visibility="player",
+            )
+            if not results:
+                yield event.plain_result(_msg(session.language, "memory_empty"))
+                return
+            output = f"{_msg(session.language, 'memory_title')}:\n" + "\n".join(
+                f"- {item}" for item in results
+            )
+            yield event.plain_result(output)
+        except Exception:
+            logger.exception("TRPG memory command failed")
+            yield event.plain_result("战役记忆搜索失败，请稍后重试。")
+
+    @filter.command("trpg_clues", desc="查看玩家可见线索。")
+    async def trpg_clues(self, event: AstrMessageEvent):
+        try:
+            session = await self._running_session(event)
+            if not session:
+                yield event.plain_result(_msg("zh", "no_session"))
+                return
+            clues = player_visible_clues(session)
+            if not clues:
+                yield event.plain_result(_msg(session.language, "clues_empty"))
+                return
+            output = f"{_msg(session.language, 'clues_title')}:\n" + "\n".join(
+                f"- {clue.title} [{clue.clue_status}]: {clue.detail}"
+                for clue in clues
+            )
+            yield event.plain_result(output)
+        except Exception:
+            logger.exception("TRPG clues command failed")
+            yield event.plain_result("线索读取失败，请稍后重试。")
+
+    @filter.command("trpg_memory_fix", desc="GM 手动修正战役记忆。")
+    async def trpg_memory_fix(self, event: AstrMessageEvent, query: GreedyStr = ""):
+        try:
+            session = await self._running_session(event)
+            if not session:
+                yield event.plain_result(_msg("zh", "no_session"))
+                return
+            if not can_manage_turn_order(
+                session,
+                _sender_id(event),
+                requires_gm=bool(session.turn_order.gm_user_id)
+                and _config_bool(self.config, "turn_control_requires_gm", True),
+            ):
+                yield event.plain_result(_msg(session.language, "turn_denied_manage"))
+                return
+            raw = str(query or "").strip()
+            action, rest = _split_first(raw)
+            action = action.lower()
+            if action == "add" and rest:
+                apply_knowledge_patches(
+                    session,
+                    [
+                        {
+                            "op": "add_fact",
+                            "text": rest,
+                            "visibility": "private",
+                            "importance": 3,
+                            "source": "manual",
+                        }
+                    ],
+                )
+            elif action == "pin" and rest:
+                _set_memory_status_or_importance(session, rest, importance=5)
+            elif action == "obsolete" and rest:
+                _set_memory_status_or_importance(session, rest, status="obsolete")
+            else:
+                yield event.plain_result(_msg(session.language, "memory_fix_usage"))
+                return
+            await self.storage.save_session(session)
+            yield event.plain_result(_msg(session.language, "memory_fixed"))
+        except Exception:
+            logger.exception("TRPG memory fix command failed")
+            yield event.plain_result("战役记忆修正失败，请稍后重试。")
+
     @filter.command("trpg_act", desc="提交玩家行动并推进剧情。")
     async def trpg_act(self, event: AstrMessageEvent, action: GreedyStr = ""):
         try:
@@ -648,6 +781,12 @@ class LLMTRPGPlugin(Star):
                     part for part in (raw_reply.strip(), _msg(session.language, "json_failed")) if part
                 )
                 final = self._prepend_turn_warning(turn_warning, final)
+                record_turn_timeline_event(
+                    session,
+                    actor=actor,
+                    action=raw_action,
+                    outcome=final,
+                )
                 self._finish_turn(session, event, raw_action, final)
                 if should_advance_turn:
                     advance_turn_order(session)
@@ -665,6 +804,7 @@ class LLMTRPGPlugin(Star):
                 if bool(self.config.get("allow_state_patch", True))
                 else []
             )
+            apply_knowledge_patches(session, parsed.patch["knowledge_patches"])
             self._apply_scene_and_memory(session, parsed.patch)
 
             dice_summary = "\n".join(dice_lines)
@@ -696,6 +836,12 @@ class LLMTRPGPlugin(Star):
                 resolution,
             )
             final = self._prepend_turn_warning(turn_warning, final)
+            record_turn_timeline_event(
+                session,
+                actor=actor,
+                action=raw_action,
+                outcome=final,
+            )
             self._finish_turn(session, event, raw_action, final)
             if should_advance_turn:
                 advance_turn_order(session)
@@ -1122,6 +1268,10 @@ class LLMTRPGPlugin(Star):
         except Exception:
             logger.warning("TRPG history summary update failed")
         session.recent_events = session.recent_events[-limit:]
+        compact_campaign_knowledge(
+            session,
+            max_timeline=_safe_int(self.config.get("max_timeline_events"), 80),
+        )
 
     def _turn_current_label(self, session: GameSession) -> str:
         player = current_turn_player(session)
@@ -1226,9 +1376,13 @@ class LLMTRPGPlugin(Star):
                 "/trpg_preset create <name> <concept> - create a preset\n"
                 "/trpg_preset list|show|update ... - manage your presets\n"
                 "/trpg_pc - show your character sheet\n"
-            "/trpg_status - show session state\n"
-            "/trpg_turn [done|next|skip|set|gm|pause|resume] - manage turn order\n"
-            "/trpg_act <action> - take an action\n"
+                "/trpg_status - show session state\n"
+                "/trpg_turn [done|next|skip|set|gm|pause|resume] - manage turn order\n"
+                "/trpg_recap - show player-visible campaign recap\n"
+                "/trpg_memory <keyword> - search campaign memory\n"
+                "/trpg_clues - show visible clues\n"
+                "/trpg_memory_fix add|pin|obsolete ... - GM memory correction\n"
+                "/trpg_act <action> - take an action\n"
                 "/trpg_roll <expr> - roll dice as a GIF, e.g. 1d20+3\n"
                 "/trpg_end - end the session\n"
                 "/trpg_export - export Markdown log"
@@ -1245,6 +1399,10 @@ class LLMTRPGPlugin(Star):
             "/trpg_pc - 查看自己的角色卡\n"
             "/trpg_status - 查看当前跑团状态\n"
             "/trpg_turn [done|next|skip|set|gm|pause|resume] - 管理行动顺序\n"
+            "/trpg_recap - 查看玩家可见战役回顾\n"
+            "/trpg_memory <关键词> - 搜索玩家可见战役记忆\n"
+            "/trpg_clues - 查看玩家可见线索\n"
+            "/trpg_memory_fix add|pin|obsolete ... - GM 修正战役记忆\n"
             "/trpg_act <行动内容> - 执行行动并推进剧情\n"
             "/trpg_roll <表达式> - 生成 GIF 掷骰，例如 1d20+3\n"
             "/trpg_end - 结束当前跑团\n"
@@ -1502,6 +1660,42 @@ def _coerce_bool(value: Any) -> bool:
         if normalized in {"false", "0", "no", "off", ""}:
             return False
     return bool(value)
+
+
+def _set_memory_status_or_importance(
+    session: GameSession,
+    entry_id: str,
+    *,
+    status: str | None = None,
+    importance: int | None = None,
+) -> bool:
+    target = str(entry_id or "").strip()
+    if not target:
+        return False
+    entries: list[Any] = []
+    entries.extend(session.campaign_knowledge.timeline)
+    entries.extend(session.campaign_knowledge.facts)
+    entries.extend(session.campaign_knowledge.entities.values())
+    entries.extend(session.campaign_knowledge.clues.values())
+    entries.extend(session.campaign_knowledge.threads.values())
+    entries.extend(session.campaign_knowledge.relationships)
+    for entry in entries:
+        ids = [
+            getattr(entry, "event_id", ""),
+            getattr(entry, "fact_id", ""),
+            getattr(entry, "entity_id", ""),
+            getattr(entry, "clue_id", ""),
+            getattr(entry, "thread_id", ""),
+            getattr(entry, "relationship_id", ""),
+        ]
+        if target not in ids:
+            continue
+        if status is not None:
+            entry.status = status
+        if importance is not None:
+            entry.importance = max(1, min(5, int(importance)))
+        return True
+    return False
 
 
 def _load_config_schema() -> dict[str, Any]:

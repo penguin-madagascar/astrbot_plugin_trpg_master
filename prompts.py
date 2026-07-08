@@ -5,8 +5,10 @@ from typing import Any
 
 try:
     from .models import GameSession
+    from .memory import build_memory_context
 except ImportError:  # pragma: no cover - direct import outside package.
     from models import GameSession
+    from memory import build_memory_context
 
 
 LANGUAGE_NAMES = {
@@ -49,6 +51,34 @@ PATCH_SCHEMA = {
         }
     ],
     "scene_patch": {"location": "...", "description": "..."},
+    "knowledge_patches": [
+        {
+            "op": "add_fact",
+            "text": "重要长期事实、承诺、伏笔、裁定或关系变化",
+            "visibility": "public",
+            "importance": 3,
+            "entities": ["角色名或地点名"],
+            "tags": ["线索或主题标签"],
+        },
+        {
+            "op": "update_clue",
+            "clue_id": "stable-clue-id",
+            "title": "线索标题",
+            "detail": "线索内容",
+            "clue_status": "discovered",
+            "visibility": "public",
+            "importance": 4,
+        },
+        {
+            "op": "update_thread",
+            "thread_id": "stable-thread-id",
+            "title": "剧情线标题",
+            "summary": "当前进展",
+            "thread_status": "active",
+            "visibility": "private",
+            "importance": 4,
+        },
+    ],
     "new_plot_threads": [],
     "memory_notes": [],
 }
@@ -84,7 +114,6 @@ def session_snapshot(session: GameSession) -> dict[str, Any]:
         "plot_threads": session.plot_threads,
         "global_items": session.global_items,
         "history_summary": session.history_summary,
-        "recent_events": session.recent_events,
         "scenario_script": session.scenario_script,
         "turn_order": _turn_order_snapshot(session),
     }
@@ -107,13 +136,23 @@ def build_action_prompt(session: GameSession, actor: str, action: str) -> str:
     language = language_name(session.language)
     snapshot = json.dumps(session_snapshot(session), ensure_ascii=False, indent=2)
     schema = json.dumps(PATCH_SCHEMA, ensure_ascii=False, indent=2)
+    memory_context = build_memory_context(
+        session,
+        actor=actor,
+        action=action,
+        visibility="gm",
+    )
     return (
         f"当前 session 的输出语言是 {language}。\n"
         "除 JSON key 外，叙事、NPC 台词、reason、memory_notes、plot_threads 都必须使用该语言。\n"
         "JSON key 必须保持英文。\n"
         "不要写死骰子结果。不要直接修改角色状态，只能提出 state_patches。\n"
+        "请用 knowledge_patches 维护长期战役知识库：人物、地点、线索、秘密、时间线、承诺、伏笔和未解决冲突。"
+        "visibility 可用 public/private/gm_only；不得通过玩家可见叙事泄露 gm_only 内容。\n"
         "当前 session 快照：\n"
         f"{snapshot}\n\n"
+        "相关战役记忆：\n"
+        f"{memory_context or '(none)'}\n\n"
         f"行动玩家：{actor}\n"
         f"玩家行动：{action}\n\n"
         "请先输出面向玩家的叙事文本，然后输出一个 ```json fenced block。"
@@ -145,6 +184,7 @@ def build_summary_prompt(session: GameSession) -> str:
     return (
         f"当前 session 的输出语言是 {language}。\n"
         "请把以下近期事件压缩进一段可供后续 GM 使用的剧情摘要。"
+        "不要覆盖高重要度长期事实、未解线索或进行中的剧情线；它们已经由战役知识库维护。"
         "只返回摘要文本，不要输出 JSON。\n\n"
         f"既有摘要：\n{session.history_summary or '(empty)'}\n\n"
         f"近期事件：\n{events}"
