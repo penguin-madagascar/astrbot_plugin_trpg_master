@@ -15,6 +15,20 @@ DEFAULT_ATTRIBUTES = {
 }
 
 
+def _normalized_attributes(values: dict[str, Any] | None) -> dict[str, int]:
+    attrs = dict(DEFAULT_ATTRIBUTES)
+    attrs.update({str(k).upper(): int(v) for k, v in (values or {}).items()})
+    return attrs
+
+
+def _normalized_skills(values: dict[str, Any] | None) -> dict[str, int]:
+    return {str(k): int(v) for k, v in (values or {}).items()}
+
+
+def _string_list(values: list[Any] | None) -> list[str]:
+    return [str(item) for item in (values or [])]
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -35,18 +49,76 @@ class PlayerCharacter:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PlayerCharacter":
         payload = dict(data)
-        attrs = dict(DEFAULT_ATTRIBUTES)
-        attrs.update({str(k).upper(): int(v) for k, v in payload.get("attributes", {}).items()})
-        payload["attributes"] = attrs
-        payload["skills"] = {str(k): int(v) for k, v in payload.get("skills", {}).items()}
-        payload["inventory"] = [str(item) for item in payload.get("inventory", [])]
-        payload["status_effects"] = [
-            str(item) for item in payload.get("status_effects", [])
-        ]
+        payload["attributes"] = _normalized_attributes(payload.get("attributes"))
+        payload["skills"] = _normalized_skills(payload.get("skills"))
+        payload["inventory"] = _string_list(payload.get("inventory"))
+        payload["status_effects"] = _string_list(payload.get("status_effects"))
         return cls(**payload)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class CharacterPreset:
+    name: str
+    character_name: str
+    concept: str
+    hp: int = 10
+    san: int = 50
+    attributes: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_ATTRIBUTES))
+    skills: dict[str, int] = field(default_factory=dict)
+    inventory: list[str] = field(default_factory=list)
+    status_effects: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.name = str(self.name)
+        self.character_name = str(self.character_name or self.name)
+        self.concept = str(self.concept)
+        self.hp = int(self.hp)
+        self.san = int(self.san)
+        self.attributes = _normalized_attributes(self.attributes)
+        self.skills = _normalized_skills(self.skills)
+        self.inventory = _string_list(self.inventory)
+        self.status_effects = _string_list(self.status_effects)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CharacterPreset":
+        payload = dict(data)
+        name = str(payload.get("name") or payload.get("character_name") or "")
+        return cls(
+            name=name,
+            character_name=str(payload.get("character_name") or name),
+            concept=str(payload.get("concept") or ""),
+            hp=int(payload.get("hp", 10)),
+            san=int(payload.get("san", 50)),
+            attributes=payload.get("attributes") or {},
+            skills=payload.get("skills") or {},
+            inventory=payload.get("inventory") or [],
+            status_effects=payload.get("status_effects") or [],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def to_player_character(
+        self,
+        *,
+        user_id: str,
+        display_name: str,
+    ) -> PlayerCharacter:
+        return PlayerCharacter(
+            user_id=user_id,
+            display_name=display_name,
+            character_name=self.character_name,
+            concept=self.concept,
+            hp=self.hp,
+            san=self.san,
+            attributes=dict(self.attributes),
+            skills=dict(self.skills),
+            inventory=list(self.inventory),
+            status_effects=list(self.status_effects),
+        )
 
 
 @dataclass

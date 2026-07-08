@@ -1,5 +1,5 @@
 from language import detect_language_from_theme
-from models import GameSession, PlayerCharacter
+from models import CharacterPreset, GameSession, PlayerCharacter
 
 
 def test_detect_language_from_theme_uses_chinese_for_empty_or_uncertain_text():
@@ -34,3 +34,59 @@ def test_game_session_serialization_preserves_language_and_players():
     assert restored.language == "en"
     assert restored.turn_count == 3
     assert restored.players["42"].character_name == "Mara"
+
+
+def test_character_preset_serialization_restores_defaults_and_full_card():
+    preset = CharacterPreset.from_dict(
+        {
+            "name": "艾莉丝",
+            "character_name": "Alice",
+            "concept": "敏捷的游侠",
+            "hp": "12",
+            "san": 48,
+            "attributes": {"str": 14},
+            "skills": {"潜行": "60"},
+            "inventory": ["银钥匙"],
+            "status_effects": ["警觉"],
+        }
+    )
+
+    assert preset.name == "艾莉丝"
+    assert preset.character_name == "Alice"
+    assert preset.hp == 12
+    assert preset.san == 48
+    assert preset.attributes["STR"] == 14
+    assert preset.attributes["DEX"] == 10
+    assert preset.skills == {"潜行": 60}
+    assert preset.inventory == ["银钥匙"]
+    assert preset.status_effects == ["警觉"]
+
+    restored = CharacterPreset.from_dict(preset.to_dict())
+
+    assert restored == preset
+
+
+def test_character_preset_to_player_character_clones_mutable_fields():
+    preset = CharacterPreset(
+        name="艾莉丝",
+        character_name="Alice",
+        concept="敏捷的游侠",
+        attributes={"STR": 14, "DEX": 12},
+        skills={"潜行": 60},
+        inventory=["银钥匙"],
+        status_effects=["警觉"],
+    )
+
+    pc = preset.to_player_character(user_id="u1", display_name="Dana")
+    pc.attributes["STR"] = 8
+    pc.skills["潜行"] = 10
+    pc.inventory.append("火把")
+    pc.status_effects.clear()
+
+    assert pc.user_id == "u1"
+    assert pc.display_name == "Dana"
+    assert pc.character_name == "Alice"
+    assert preset.attributes["STR"] == 14
+    assert preset.skills["潜行"] == 60
+    assert preset.inventory == ["银钥匙"]
+    assert preset.status_effects == ["警觉"]
