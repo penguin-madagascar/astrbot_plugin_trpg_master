@@ -123,6 +123,45 @@ class CharacterPreset:
 
 
 @dataclass
+class TurnOrderState:
+    enabled: bool = False
+    mode: str = "soft"
+    gm_user_id: str = ""
+    gm_display_name: str = ""
+    queue: list[str] = field(default_factory=list)
+    current_index: int = 0
+    round_count: int = 1
+    paused: bool = False
+
+    def __post_init__(self) -> None:
+        self.enabled = bool(self.enabled)
+        self.mode = "soft"
+        self.gm_user_id = str(self.gm_user_id or "")
+        self.gm_display_name = str(self.gm_display_name or "")
+        self.queue = _string_list(self.queue)
+        self.current_index = max(0, int(self.current_index or 0))
+        self.round_count = max(1, int(self.round_count or 1))
+        self.paused = bool(self.paused)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "TurnOrderState":
+        payload = dict(data or {})
+        return cls(
+            enabled=bool(payload.get("enabled", False)),
+            mode=str(payload.get("mode") or "soft"),
+            gm_user_id=str(payload.get("gm_user_id") or ""),
+            gm_display_name=str(payload.get("gm_display_name") or ""),
+            queue=payload.get("queue") or [],
+            current_index=int(payload.get("current_index", 0) or 0),
+            round_count=int(payload.get("round_count", 1) or 1),
+            paused=bool(payload.get("paused", False)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ScenarioScript:
     script_id: str
     title: str
@@ -271,6 +310,7 @@ class GameSession:
     recent_events: list[str] = field(default_factory=list)
     logs: list[SessionLogEntry] = field(default_factory=list)
     scenario_script: dict[str, Any] | None = None
+    turn_order: TurnOrderState = field(default_factory=TurnOrderState)
 
     @classmethod
     def new(
@@ -308,6 +348,7 @@ class GameSession:
         payload["scenario_script"] = (
             dict(scenario_script) if isinstance(scenario_script, dict) else None
         )
+        payload["turn_order"] = TurnOrderState.from_dict(payload.get("turn_order"))
         return cls(**payload)
 
     def to_dict(self) -> dict[str, Any]:
@@ -329,6 +370,7 @@ class GameSession:
             "recent_events": list(self.recent_events),
             "logs": [entry.to_dict() for entry in self.logs],
             "scenario_script": dict(self.scenario_script) if self.scenario_script else None,
+            "turn_order": self.turn_order.to_dict(),
         }
 
     def add_log(

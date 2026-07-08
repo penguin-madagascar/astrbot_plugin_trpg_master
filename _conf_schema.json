@@ -46,5 +46,17 @@
     "description": "严格要求 GM JSON fenced block",
     "hint": "开启后 /trpg_act 只解析 fenced JSON；解析失败不会应用状态变更。",
     "default": true
+  },
+  "turn_order_enabled": {
+    "type": "bool",
+    "description": "启用多人行动顺序",
+    "hint": "新跑团启动时创建软队列；玩家加入后自动入队。",
+    "default": true
+  },
+  "turn_control_requires_gm": {
+    "type": "bool",
+    "description": "行动顺序管理需要 GM 权限",
+    "hint": "开启后只有 /trpg_start 发起者或转交后的 GM 可以 next、skip、set、gm、pause、resume。",
+    "default": true
   }
 }

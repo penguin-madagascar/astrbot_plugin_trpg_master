@@ -97,6 +97,18 @@ try:
     )
     from .state import apply_state_patches
     from .storage import SessionStorage
+    from .turn_order import (
+        add_player_to_turn_order,
+        advance_turn_order,
+        can_finish_turn,
+        can_manage_turn_order,
+        current_turn_player,
+        initialize_turn_order,
+        is_current_turn,
+        is_turn_order_active,
+        resolve_turn_user_id,
+        set_current_turn,
+    )
 except ImportError:  # pragma: no cover - direct module loading outside package.
     from dice import roll_d20_check, roll_dice
     from dice_gif import generate_dice_roll_gif
@@ -120,6 +132,18 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
     )
     from state import apply_state_patches
     from storage import SessionStorage
+    from turn_order import (
+        add_player_to_turn_order,
+        advance_turn_order,
+        can_finish_turn,
+        can_manage_turn_order,
+        current_turn_player,
+        initialize_turn_order,
+        is_current_turn,
+        is_turn_order_active,
+        resolve_turn_user_id,
+        set_current_turn,
+    )
 
 
 PLUGIN_NAME = "astrbot_plugin_trpg_master"
@@ -146,6 +170,19 @@ MESSAGES = {
         "preset_updated": "角色预设已更新：{name}（{change}）",
         "status_title": "跑团状态",
         "act_usage": "用法：/trpg_act 行动内容",
+        "turn_usage": "用法：/trpg_turn [done|next|skip|set 角色名|gm 角色名|pause|resume]",
+        "turn_disabled": "当前跑团未启用行动顺序。",
+        "turn_title": "行动顺序",
+        "turn_none": "暂无建议行动者",
+        "turn_advanced": "行动顺序已推进。当前建议行动者：{current}",
+        "turn_set": "当前建议行动者已设置为：{current}",
+        "turn_gm_set": "GM 已转交给：{gm}",
+        "turn_paused": "行动顺序已暂停。",
+        "turn_resumed": "行动顺序已恢复。",
+        "turn_denied_manage": "只有 GM 可以管理行动顺序。",
+        "turn_denied_done": "只有当前行动者或 GM 可以结束当前行动。",
+        "turn_target_not_found": "未找到行动顺序目标：{target}",
+        "turn_out_of_order": "行动顺序提示：当前建议行动者是 {current}。",
         "json_failed": "本回合未应用状态变更：GM 返回的 JSON 无法解析。",
         "roll_failed": "骰子表达式错误：{error}",
         "ended": "跑团已结束，日志已保留。",
@@ -175,6 +212,19 @@ MESSAGES = {
         "preset_updated": "Character preset updated: {name} ({change})",
         "status_title": "Session Status",
         "act_usage": "Usage: /trpg_act action",
+        "turn_usage": "Usage: /trpg_turn [done|next|skip|set character|gm character|pause|resume]",
+        "turn_disabled": "Turn order is not enabled for this session.",
+        "turn_title": "Turn Order",
+        "turn_none": "No suggested actor",
+        "turn_advanced": "Turn order advanced. Current suggested actor: {current}",
+        "turn_set": "Current suggested actor set to: {current}",
+        "turn_gm_set": "GM transferred to: {gm}",
+        "turn_paused": "Turn order paused.",
+        "turn_resumed": "Turn order resumed.",
+        "turn_denied_manage": "Only the GM can manage turn order.",
+        "turn_denied_done": "Only the current actor or GM can end the current turn.",
+        "turn_target_not_found": "Turn order target not found: {target}",
+        "turn_out_of_order": "Turn order note: the current suggested actor is {current}.",
         "json_failed": "No state changes were applied this turn: the GM JSON could not be parsed.",
         "roll_failed": "Invalid dice expression: {error}",
         "ended": "Session ended. Logs were kept.",
@@ -282,6 +332,12 @@ class LLMTRPGPlugin(Star):
             theme=session_theme,
             language=language,
         )
+        initialize_turn_order(
+            session,
+            enabled=_config_bool(self.config, "turn_order_enabled", True),
+            gm_user_id=_sender_id(event),
+            gm_display_name=_sender_name(event),
+        )
         if script:
             session.scenario_script = script.to_session_context()
             session.history_summary = _scenario_history_summary(script)
@@ -339,6 +395,7 @@ class LLMTRPGPlugin(Star):
                     display_name=_sender_name(event),
                 )
                 session.players[user_id] = pc
+                add_player_to_turn_order(session, user_id)
                 output = _msg(
                     session.language,
                     "joined",
@@ -368,6 +425,7 @@ class LLMTRPGPlugin(Star):
                 concept=concept,
             )
             session.players[user_id] = pc
+            add_player_to_turn_order(session, user_id)
             output = _msg(
                 session.language,
                 "joined",
@@ -445,6 +503,110 @@ class LLMTRPGPlugin(Star):
             logger.exception("TRPG status failed")
             yield event.plain_result("跑团状态读取失败，请稍后重试。")
 
+    @filter.command("trpg_turn", desc="查看或管理当前跑团行动顺序。")
+    async def trpg_turn(self, event: AstrMessageEvent, query: GreedyStr = ""):
+        try:
+            session = await self._running_session(event)
+            if not session:
+                yield event.plain_result(_msg("zh", "no_session"))
+                return
+            if not session.turn_order.enabled:
+                yield event.plain_result(_msg(session.language, "turn_disabled"))
+                return
+
+            raw = str(query or "").strip()
+            action, rest = _split_first(raw)
+            action = action.lower()
+            sender_id = _sender_id(event)
+            requires_gm = _config_bool(
+                self.config,
+                "turn_control_requires_gm",
+                True,
+            )
+
+            if not action:
+                yield event.plain_result(self._format_turn_order(session))
+                return
+            if action in {"next", "skip"}:
+                if not can_manage_turn_order(
+                    session,
+                    sender_id,
+                    requires_gm=requires_gm,
+                ):
+                    yield event.plain_result(_msg(session.language, "turn_denied_manage"))
+                    return
+                advance_turn_order(session)
+                await self.storage.save_session(session)
+                yield event.plain_result(self._turn_advanced_message(session))
+                return
+            if action == "done":
+                if not can_finish_turn(session, sender_id, requires_gm=requires_gm):
+                    yield event.plain_result(_msg(session.language, "turn_denied_done"))
+                    return
+                advance_turn_order(session)
+                await self.storage.save_session(session)
+                yield event.plain_result(self._turn_advanced_message(session))
+                return
+            if action == "set":
+                if not can_manage_turn_order(
+                    session,
+                    sender_id,
+                    requires_gm=requires_gm,
+                ):
+                    yield event.plain_result(_msg(session.language, "turn_denied_manage"))
+                    return
+                player = set_current_turn(session, rest)
+                if player is None:
+                    yield event.plain_result(
+                        _msg(session.language, "turn_target_not_found", target=rest)
+                    )
+                    return
+                await self.storage.save_session(session)
+                yield event.plain_result(
+                    _msg(session.language, "turn_set", current=player.character_name)
+                )
+                return
+            if action == "gm":
+                if not can_manage_turn_order(
+                    session,
+                    sender_id,
+                    requires_gm=requires_gm,
+                ):
+                    yield event.plain_result(_msg(session.language, "turn_denied_manage"))
+                    return
+                target_user_id = resolve_turn_user_id(session, rest)
+                if not target_user_id:
+                    yield event.plain_result(
+                        _msg(session.language, "turn_target_not_found", target=rest)
+                    )
+                    return
+                target = session.players[target_user_id]
+                session.turn_order.gm_user_id = target_user_id
+                session.turn_order.gm_display_name = target.display_name
+                await self.storage.save_session(session)
+                yield event.plain_result(
+                    _msg(session.language, "turn_gm_set", gm=target.display_name)
+                )
+                return
+            if action in {"pause", "resume"}:
+                if not can_manage_turn_order(
+                    session,
+                    sender_id,
+                    requires_gm=requires_gm,
+                ):
+                    yield event.plain_result(_msg(session.language, "turn_denied_manage"))
+                    return
+                session.turn_order.paused = action == "pause"
+                await self.storage.save_session(session)
+                key = "turn_paused" if session.turn_order.paused else "turn_resumed"
+                yield event.plain_result(_msg(session.language, key))
+                return
+
+            yield event.plain_result(_msg(session.language, "turn_usage"))
+        except Exception:
+            logger.exception("TRPG turn command failed")
+            yield event.plain_result("行动顺序操作失败，请稍后重试。")
+
     @filter.command("trpg_act", desc="提交玩家行动并推进剧情。")
     async def trpg_act(self, event: AstrMessageEvent, action: GreedyStr = ""):
         try:
@@ -460,7 +622,14 @@ class LLMTRPGPlugin(Star):
                 yield event.plain_result(_msg(session.language, "max_turns"))
                 return
 
-            actor = _sender_name(event)
+            sender_id = _sender_id(event)
+            actor_pc = session.players.get(sender_id)
+            actor = actor_pc.character_name if actor_pc else _sender_name(event)
+            turn_warning = self._turn_order_warning(session, sender_id)
+            should_advance_turn = is_turn_order_active(session) and is_current_turn(
+                session,
+                sender_id,
+            )
             raw_reply = await call_gm(
                 self.context,
                 event,
@@ -478,7 +647,10 @@ class LLMTRPGPlugin(Star):
                 final = "\n\n".join(
                     part for part in (raw_reply.strip(), _msg(session.language, "json_failed")) if part
                 )
+                final = self._prepend_turn_warning(turn_warning, final)
                 self._finish_turn(session, event, raw_action, final)
+                if should_advance_turn:
+                    advance_turn_order(session)
                 await self._trim_recent_events(session, event)
                 await self.storage.save_session(session)
                 yield event.plain_result(final)
@@ -523,7 +695,10 @@ class LLMTRPGPlugin(Star):
                 state_summary,
                 resolution,
             )
+            final = self._prepend_turn_warning(turn_warning, final)
             self._finish_turn(session, event, raw_action, final)
+            if should_advance_turn:
+                advance_turn_order(session)
             await self._trim_recent_events(session, event)
             await self.storage.save_session(session)
             yield event.plain_result(final)
@@ -948,6 +1123,57 @@ class LLMTRPGPlugin(Star):
             logger.warning("TRPG history summary update failed")
         session.recent_events = session.recent_events[-limit:]
 
+    def _turn_current_label(self, session: GameSession) -> str:
+        player = current_turn_player(session)
+        if player is None:
+            return _msg(session.language, "turn_none")
+        return player.character_name
+
+    def _turn_advanced_message(self, session: GameSession) -> str:
+        return _msg(
+            session.language,
+            "turn_advanced",
+            current=self._turn_current_label(session),
+        )
+
+    def _turn_order_warning(self, session: GameSession, user_id: str) -> str:
+        if not is_turn_order_active(session) or is_current_turn(session, user_id):
+            return ""
+        player = current_turn_player(session)
+        if player is None:
+            return ""
+        return _msg(
+            session.language,
+            "turn_out_of_order",
+            current=player.character_name,
+        )
+
+    @staticmethod
+    def _prepend_turn_warning(warning: str, output: str) -> str:
+        return "\n\n".join(part for part in (warning, output) if part)
+
+    def _format_turn_order(self, session: GameSession) -> str:
+        order = session.turn_order
+        queue_lines = []
+        for index, user_id in enumerate(order.queue):
+            player = session.players.get(user_id)
+            if player is None:
+                continue
+            marker = "->" if index == order.current_index else "  "
+            queue_lines.append(f"{marker} {player.character_name} ({player.display_name})")
+        queue = "\n".join(queue_lines) or "- none"
+        paused = "yes" if order.paused else "no"
+        gm = order.gm_display_name or order.gm_user_id or "-"
+        return (
+            f"{_msg(session.language, 'turn_title')}: {session.title}\n"
+            f"Mode: {order.mode}\n"
+            f"Round: {order.round_count}\n"
+            f"Paused: {paused}\n"
+            f"GM: {gm}\n"
+            f"Current: {self._turn_current_label(session)}\n"
+            f"Queue:\n{queue}"
+        )
+
     def _format_pc(self, language: str, pc: PlayerCharacter) -> str:
         attrs = ", ".join(f"{key} {value}" for key, value in pc.attributes.items())
         inventory = ", ".join(pc.inventory) if pc.inventory else "-"
@@ -973,6 +1199,11 @@ class LLMTRPGPlugin(Star):
         ) or "- none"
         threads = "\n".join(f"- {item}" for item in session.plot_threads) or "- none"
         scene = session.scene.get("description") or session.scene.get("location") or "-"
+        turn_order = (
+            self._format_turn_order(session)
+            if session.turn_order.enabled
+            else _msg(session.language, "turn_disabled")
+        )
         return (
             f"{_msg(session.language, 'status_title')}: {session.title}\n"
             f"Language: {session.language}\n"
@@ -981,6 +1212,7 @@ class LLMTRPGPlugin(Star):
             f"Players:\n{players}\n"
             f"NPCs:\n{npcs}\n"
             f"Plot Threads:\n{threads}\n"
+            f"{turn_order}\n"
             f"Summary: {session.history_summary or '-'}"
         )
 
@@ -994,8 +1226,9 @@ class LLMTRPGPlugin(Star):
                 "/trpg_preset create <name> <concept> - create a preset\n"
                 "/trpg_preset list|show|update ... - manage your presets\n"
                 "/trpg_pc - show your character sheet\n"
-                "/trpg_status - show session state\n"
-                "/trpg_act <action> - take an action\n"
+            "/trpg_status - show session state\n"
+            "/trpg_turn [done|next|skip|set|gm|pause|resume] - manage turn order\n"
+            "/trpg_act <action> - take an action\n"
                 "/trpg_roll <expr> - roll dice as a GIF, e.g. 1d20+3\n"
                 "/trpg_end - end the session\n"
                 "/trpg_export - export Markdown log"
@@ -1011,6 +1244,7 @@ class LLMTRPGPlugin(Star):
             "/trpg_preset update <名称> <属性名称> <新值> - 微调一个字段\n"
             "/trpg_pc - 查看自己的角色卡\n"
             "/trpg_status - 查看当前跑团状态\n"
+            "/trpg_turn [done|next|skip|set|gm|pause|resume] - 管理行动顺序\n"
             "/trpg_act <行动内容> - 执行行动并推进剧情\n"
             "/trpg_roll <表达式> - 生成 GIF 掷骰，例如 1d20+3\n"
             "/trpg_end - 结束当前跑团\n"
@@ -1330,3 +1564,9 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _config_bool(config: AstrBotConfig | dict, key: str, default: bool) -> bool:
+    if key not in config:
+        return default
+    return _coerce_bool(config.get(key))

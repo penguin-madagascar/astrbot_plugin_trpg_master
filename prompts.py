@@ -86,6 +86,7 @@ def session_snapshot(session: GameSession) -> dict[str, Any]:
         "history_summary": session.history_summary,
         "recent_events": session.recent_events,
         "scenario_script": session.scenario_script,
+        "turn_order": _turn_order_snapshot(session),
     }
 
 
@@ -172,3 +173,31 @@ def _format_scenario_context(scenario: dict[str, Any] | None) -> str:
     if tags:
         lines.append(f"标签：{', '.join(tags)}")
     return "\n".join(lines)
+
+
+def _turn_order_snapshot(session: GameSession) -> dict[str, Any]:
+    order = session.turn_order
+    queue = []
+    for index, user_id in enumerate(order.queue):
+        player = session.players.get(user_id)
+        if player is None:
+            continue
+        queue.append(
+            {
+                "user_id": user_id,
+                "character_name": player.character_name,
+                "display_name": player.display_name,
+                "is_current": index == order.current_index,
+            }
+        )
+    current = next((item for item in queue if item["is_current"]), None)
+    return {
+        "enabled": order.enabled,
+        "mode": order.mode,
+        "gm_user_id": order.gm_user_id,
+        "gm_display_name": order.gm_display_name,
+        "round_count": order.round_count,
+        "paused": order.paused,
+        "current": current,
+        "queue": queue,
+    }
