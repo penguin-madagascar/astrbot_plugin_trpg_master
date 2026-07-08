@@ -111,6 +111,13 @@ MESSAGES = {
         "not_joined": "你还没有加入当前跑团，请先使用 /trpg_join 角色名 一句话设定。",
         "pc_title": "角色卡",
         "preset_title": "角色预设",
+        "preset_usage": "用法：/trpg_preset create 名称 一句话设定 | list | show 名称 | update 名称 属性名称 新值",
+        "preset_created": "角色预设已创建：{name}",
+        "preset_exists": "角色预设已存在：{name}",
+        "preset_not_found": "未找到你的角色预设：{name}",
+        "preset_empty": "你还没有角色预设。",
+        "preset_list_title": "你的角色预设：",
+        "preset_updated": "角色预设已更新：{name}（{change}）",
         "status_title": "跑团状态",
         "act_usage": "用法：/trpg_act 行动内容",
         "json_failed": "本回合未应用状态变更：GM 返回的 JSON 无法解析。",
@@ -133,6 +140,13 @@ MESSAGES = {
         "not_joined": "You have not joined this session. Use /trpg_join character_name one-line concept first.",
         "pc_title": "Character Sheet",
         "preset_title": "Character Preset",
+        "preset_usage": "Usage: /trpg_preset create name concept | list | show name | update name field value",
+        "preset_created": "Character preset created: {name}",
+        "preset_exists": "Character preset already exists: {name}",
+        "preset_not_found": "Character preset not found: {name}",
+        "preset_empty": "You do not have any character presets.",
+        "preset_list_title": "Your character presets:",
+        "preset_updated": "Character preset updated: {name} ({change})",
         "status_title": "Session Status",
         "act_usage": "Usage: /trpg_act action",
         "json_failed": "No state changes were applied this turn: the GM JSON could not be parsed.",
@@ -269,6 +283,40 @@ class LLMTRPGPlugin(Star):
             if not raw:
                 yield event.plain_result(_msg(session.language, "join_usage"))
                 return
+            if raw.lower().startswith("preset:"):
+                preset_name = raw[len("preset:") :].strip()
+                if not preset_name:
+                    yield event.plain_result(_msg(session.language, "join_usage"))
+                    return
+                user_id = _sender_id(event)
+                presets = await self.storage.load_presets(user_id)
+                preset = presets.get(preset_name)
+                if preset is None:
+                    yield event.plain_result(
+                        _msg(session.language, "preset_not_found", name=preset_name)
+                    )
+                    return
+                pc = preset.to_player_character(
+                    user_id=user_id,
+                    display_name=_sender_name(event),
+                )
+                session.players[user_id] = pc
+                output = _msg(
+                    session.language,
+                    "joined",
+                    name=pc.character_name,
+                    hp=pc.hp,
+                    san=pc.san,
+                )
+                session.add_log(
+                    user=_sender_label(event),
+                    command="trpg_join",
+                    input_text=raw,
+                    output_summary=output,
+                )
+                await self.storage.save_session(session)
+                yield event.plain_result(output)
+                return
             character_name, concept = _split_first(raw)
             if not character_name:
                 yield event.plain_result(_msg(session.language, "join_usage"))
@@ -300,6 +348,36 @@ class LLMTRPGPlugin(Star):
         except Exception:
             logger.exception("TRPG join failed")
             yield event.plain_result("加入跑团失败，请稍后重试。")
+
+    @filter.command("trpg_preset", desc="管理自己的 TRPG 角色预设。")
+    async def trpg_preset(self, event: AstrMessageEvent, query: GreedyStr = ""):
+        try:
+            language = await self._command_language(event)
+            raw = str(query or "").strip()
+            action, rest = _split_first(raw)
+            action = action.lower()
+            if action == "create":
+                output = await self._preset_create(event, language, rest)
+                yield event.plain_result(output)
+                return
+            if action == "list":
+                output = await self._preset_list(event, language)
+                yield event.plain_result(output)
+                return
+            if action == "show":
+                output = await self._preset_show(event, language, rest)
+                yield event.plain_result(output)
+                return
+            if action == "update":
+                output = await self._preset_update(event, language, rest)
+                yield event.plain_result(output)
+                return
+            yield event.plain_result(_msg(language, "preset_usage"))
+        except ValueError as exc:
+            yield event.plain_result(str(exc))
+        except Exception:
+            logger.exception("TRPG preset command failed")
+            yield event.plain_result("角色预设操作失败，请稍后重试。")
 
     @filter.command("trpg_pc", desc="查看自己的角色卡。")
     async def trpg_pc(self, event: AstrMessageEvent):
@@ -503,6 +581,79 @@ class LLMTRPGPlugin(Star):
             session.language = str(self.config.get("response_language") or "zh")
         return session
 
+    async def _command_language(self, event: AstrMessageEvent) -> str:
+        session = await self.storage.load_session(_session_id(event))
+        if session and session.status == "running":
+            return session.language or "zh"
+        return "zh"
+
+    async def _preset_create(
+        self,
+        event: AstrMessageEvent,
+        language: str,
+        raw: str,
+    ) -> str:
+        name, concept = _split_first(str(raw or "").strip())
+        if not name or not concept:
+            return _msg(language, "preset_usage")
+        user_id = _sender_id(event)
+        presets = await self.storage.load_presets(user_id)
+        if name in presets:
+            return _msg(language, "preset_exists", name=name)
+        presets[name] = CharacterPreset(
+            name=name,
+            character_name=name,
+            concept=concept,
+        )
+        await self.storage.save_presets(user_id, presets)
+        return _msg(language, "preset_created", name=name)
+
+    async def _preset_list(self, event: AstrMessageEvent, language: str) -> str:
+        presets = await self.storage.load_presets(_sender_id(event))
+        if not presets:
+            return _msg(language, "preset_empty")
+        items = "\n".join(
+            f"- {name}: {preset.character_name}, HP {preset.hp}, "
+            f"SAN {preset.san}, {preset.concept}"
+            for name, preset in sorted(presets.items())
+        )
+        return f"{_msg(language, 'preset_list_title')}\n{items}"
+
+    async def _preset_show(
+        self,
+        event: AstrMessageEvent,
+        language: str,
+        raw: str,
+    ) -> str:
+        name = str(raw or "").strip()
+        if not name:
+            return _msg(language, "preset_usage")
+        presets = await self.storage.load_presets(_sender_id(event))
+        preset = presets.get(name)
+        if preset is None:
+            return _msg(language, "preset_not_found", name=name)
+        return _format_preset(language, preset)
+
+    async def _preset_update(
+        self,
+        event: AstrMessageEvent,
+        language: str,
+        raw: str,
+    ) -> str:
+        name, rest = _split_first(str(raw or "").strip())
+        field, value = _split_first(rest)
+        if not name or not field or not value:
+            return _msg(language, "preset_usage")
+        user_id = _sender_id(event)
+        presets = await self.storage.load_presets(user_id)
+        preset = presets.get(name)
+        if preset is None:
+            return _msg(language, "preset_not_found", name=name)
+        change = _apply_preset_update(preset, field, value)
+        presets[name] = preset
+        await self.storage.save_presets(user_id, presets)
+        return _msg(language, "preset_updated", name=name, change=change)
+
     def _gm_system_prompt(self) -> str:
         return str(self.config.get("gm_system_prompt") or DEFAULT_GM_SYSTEM_PROMPT)
 
@@ -652,6 +803,9 @@ class LLMTRPGPlugin(Star):
                 "LLM TRPG commands:\n"
                 "/trpg_start [theme] - start a session\n"
                 "/trpg_join <name> <concept> - join as a PC\n"
+                "/trpg_join preset:<name> - join with your preset\n"
+                "/trpg_preset create <name> <concept> - create a preset\n"
+                "/trpg_preset list|show|update ... - manage your presets\n"
                 "/trpg_pc - show your character sheet\n"
                 "/trpg_status - show session state\n"
                 "/trpg_act <action> - take an action\n"
@@ -663,6 +817,11 @@ class LLMTRPGPlugin(Star):
             "LLM TRPG 指令：\n"
             "/trpg_start [主题] - 启动跑团\n"
             "/trpg_join <角色名> <一句话设定> - 加入并创建角色\n"
+            "/trpg_join preset:<名称> - 使用自己的角色预设加入\n"
+            "/trpg_preset create <名称> <一句话设定> - 创建角色预设\n"
+            "/trpg_preset list - 列出自己的角色预设\n"
+            "/trpg_preset show <名称> - 查看角色预设\n"
+            "/trpg_preset update <名称> <属性名称> <新值> - 微调一个字段\n"
             "/trpg_pc - 查看自己的角色卡\n"
             "/trpg_status - 查看当前跑团状态\n"
             "/trpg_act <行动内容> - 执行行动并推进剧情\n"
