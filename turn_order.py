@@ -10,13 +10,9 @@ def initialize_turn_order(
     session: GameSession,
     *,
     enabled: bool,
-    gm_user_id: str,
-    gm_display_name: str,
 ) -> None:
     session.turn_order = TurnOrderState(
         enabled=enabled,
-        gm_user_id=gm_user_id,
-        gm_display_name=gm_display_name,
     )
 
 
@@ -75,30 +71,6 @@ def advance_turn_order(session: GameSession) -> PlayerCharacter | None:
     return current_turn_player(session)
 
 
-def resolve_turn_user_id(session: GameSession, query: str) -> str:
-    target = str(query or "").strip()
-    if not target:
-        return ""
-    if target in session.players:
-        return target
-    for user_id, player in session.players.items():
-        if player.character_name == target or player.display_name == target:
-            return user_id
-    return ""
-
-
-def set_current_turn(session: GameSession, query: str) -> PlayerCharacter | None:
-    user_id = resolve_turn_user_id(session, query)
-    if not user_id:
-        return None
-    order = session.turn_order
-    if user_id not in order.queue:
-        order.queue.append(user_id)
-    normalize_turn_order(session)
-    order.current_index = order.queue.index(user_id)
-    return session.players[user_id]
-
-
 def is_turn_order_active(session: GameSession) -> bool:
     normalize_turn_order(session)
     order = session.turn_order
@@ -109,23 +81,5 @@ def is_current_turn(session: GameSession, user_id: str) -> bool:
     return bool(user_id and current_turn_user_id(session) == str(user_id))
 
 
-def can_manage_turn_order(
-    session: GameSession,
-    user_id: str,
-    *,
-    requires_gm: bool,
-) -> bool:
-    return not requires_gm or str(user_id or "") == session.turn_order.gm_user_id
-
-
-def can_finish_turn(
-    session: GameSession,
-    user_id: str,
-    *,
-    requires_gm: bool,
-) -> bool:
-    return is_current_turn(session, user_id) or can_manage_turn_order(
-        session,
-        user_id,
-        requires_gm=requires_gm,
-    )
+def can_finish_turn(session: GameSession, user_id: str) -> bool:
+    return is_current_turn(session, user_id)

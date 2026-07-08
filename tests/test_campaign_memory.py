@@ -390,6 +390,10 @@ def test_memory_query_commands_do_not_expose_gm_only_entries():
     assert "雾镇真相" in recap[0]
 
 
+def test_manual_memory_fix_command_is_removed():
+    assert not hasattr(LLMTRPGPlugin, "trpg_memory_fix")
+
+
 def test_trpg_start_initializes_campaign_knowledge_from_scenario(monkeypatch):
     async def fake_call_gm(context, event, *, prompt, system_prompt):
         return "祠堂木门自行合上。"

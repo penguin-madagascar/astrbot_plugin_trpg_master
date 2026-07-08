@@ -134,8 +134,6 @@ class CharacterPreset:
 class TurnOrderState:
     enabled: bool = False
     mode: str = "soft"
-    gm_user_id: str = ""
-    gm_display_name: str = ""
     queue: list[str] = field(default_factory=list)
     current_index: int = 0
     round_count: int = 1
@@ -144,8 +142,6 @@ class TurnOrderState:
     def __post_init__(self) -> None:
         self.enabled = bool(self.enabled)
         self.mode = "soft"
-        self.gm_user_id = str(self.gm_user_id or "")
-        self.gm_display_name = str(self.gm_display_name or "")
         self.queue = _string_list(self.queue)
         self.current_index = max(0, int(self.current_index or 0))
         self.round_count = max(1, int(self.round_count or 1))
@@ -157,8 +153,6 @@ class TurnOrderState:
         return cls(
             enabled=bool(payload.get("enabled", False)),
             mode=str(payload.get("mode") or "soft"),
-            gm_user_id=str(payload.get("gm_user_id") or ""),
-            gm_display_name=str(payload.get("gm_display_name") or ""),
             queue=payload.get("queue") or [],
             current_index=int(payload.get("current_index", 0) or 0),
             round_count=int(payload.get("round_count", 1) or 1),

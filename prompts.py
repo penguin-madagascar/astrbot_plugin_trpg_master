@@ -234,8 +234,6 @@ def _turn_order_snapshot(session: GameSession) -> dict[str, Any]:
     return {
         "enabled": order.enabled,
         "mode": order.mode,
-        "gm_user_id": order.gm_user_id,
-        "gm_display_name": order.gm_display_name,
         "round_count": order.round_count,
         "paused": order.paused,
         "current": current,
