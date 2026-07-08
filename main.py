@@ -1063,12 +1063,14 @@ class LLMTRPGPlugin(Star):
 
     async def web_dashboard(self):
         scripts = await self.storage.load_scenario_scripts()
+        session_loader = getattr(self.storage, "load_saved_sessions", None)
+        sessions = await session_loader() if callable(session_loader) else []
         return json_response(
             {
                 "settings_schema": _load_config_schema(),
                 "settings": dict(self.config),
                 "scripts": _script_list_payload(scripts),
-                "knowledge_entries": [],
+                "knowledge_entries": _knowledge_entries_payload(sessions),
             }
         )
 
@@ -1590,6 +1592,95 @@ def _script_list_payload(scripts: dict[str, ScenarioScript]) -> list[dict[str, A
         script.to_dict()
         for script in sorted(scripts.values(), key=lambda item: item.title)
     ]
+
+
+def _knowledge_entries_payload(sessions: list[GameSession]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for session in sessions:
+        knowledge = session.campaign_knowledge
+        base = {
+            "session_id": session.session_id,
+            "session_title": session.title,
+        }
+        entries.extend(
+            {
+                **base,
+                "type": "timeline",
+                "id": entry.event_id,
+                "title": f"T{entry.turn}",
+                "summary": entry.summary,
+                "visibility": entry.visibility,
+                "status": entry.status,
+                "importance": entry.importance,
+            }
+            for entry in knowledge.timeline
+        )
+        entries.extend(
+            {
+                **base,
+                "type": "entity",
+                "id": entity.entity_id,
+                "title": entity.name,
+                "summary": entity.summary,
+                "visibility": entity.visibility,
+                "status": entity.status,
+                "importance": entity.importance,
+            }
+            for entity in knowledge.entities.values()
+        )
+        entries.extend(
+            {
+                **base,
+                "type": "fact",
+                "id": fact.fact_id,
+                "title": fact.text,
+                "summary": fact.text,
+                "visibility": fact.visibility,
+                "status": fact.status,
+                "importance": fact.importance,
+            }
+            for fact in knowledge.facts
+        )
+        entries.extend(
+            {
+                **base,
+                "type": "clue",
+                "id": clue.clue_id,
+                "title": clue.title,
+                "summary": clue.detail,
+                "visibility": clue.visibility,
+                "status": clue.status,
+                "importance": clue.importance,
+            }
+            for clue in knowledge.clues.values()
+        )
+        entries.extend(
+            {
+                **base,
+                "type": "thread",
+                "id": thread.thread_id,
+                "title": thread.title,
+                "summary": thread.summary,
+                "visibility": thread.visibility,
+                "status": thread.status,
+                "importance": thread.importance,
+            }
+            for thread in knowledge.threads.values()
+        )
+        entries.extend(
+            {
+                **base,
+                "type": "relationship",
+                "id": relationship.relationship_id,
+                "title": f"{relationship.source} -> {relationship.target}",
+                "summary": relationship.description,
+                "visibility": relationship.visibility,
+                "status": relationship.status,
+                "importance": relationship.importance,
+            }
+            for relationship in knowledge.relationships
+        )
+    return entries
 
 
 def _parse_scenario_import(content: str, filename: str = "") -> list[ScenarioScript]:

@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from models import CharacterPreset, ScenarioScript
+from models import CharacterPreset, GameSession, ScenarioScript
 from storage import SessionStorage
 
 
@@ -79,6 +79,22 @@ def test_storage_saves_global_scenario_scripts_to_kv_and_file_cache():
 
         assert "trpg_scenario_scripts" in context.data
         assert (Path(tmp) / "scenario_scripts.json").exists()
+
+
+def test_storage_lists_saved_session_file_cache():
+    with TemporaryDirectory() as tmp:
+        storage = SessionStorage(NoKVContext(), Path(tmp))
+        session = GameSession.new(
+            session_id="session-1",
+            title="雾镇",
+            theme="民俗恐怖",
+            language="zh",
+        )
+
+        asyncio.run(storage.save_session(session))
+        sessions = asyncio.run(storage.load_saved_sessions())
+
+        assert [item.session_id for item in sessions] == ["session-1"]
 
 
 def test_storage_finds_scenario_script_by_id_or_title():

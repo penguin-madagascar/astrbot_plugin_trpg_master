@@ -477,6 +477,41 @@ def test_dashboard_contains_campaign_knowledge_tab_and_filters():
     assert "knowledge-status" in html
 
 
+def test_dashboard_payload_includes_saved_session_knowledge_entries():
+    session = make_session()
+    apply_knowledge_patches(
+        session,
+        [
+            {
+                "op": "update_clue",
+                "clue_id": "stopped-clock",
+                "title": "停摆钟楼",
+                "detail": "指针停在三点十七分。",
+                "clue_status": "discovered",
+                "visibility": "public",
+            }
+        ],
+    )
+    plugin = LLMTRPGPlugin(context=object())
+    plugin.storage = DashboardStorage(session)
+
+    payload = asyncio.run(plugin.web_dashboard())
+
+    assert payload["knowledge_entries"] == [
+        {
+            "session_id": "session-1",
+            "session_title": "雾镇",
+            "type": "clue",
+            "id": "stopped-clock",
+            "title": "停摆钟楼",
+            "summary": "指针停在三点十七分。",
+            "visibility": "public",
+            "status": "active",
+            "importance": 3,
+        }
+    ]
+
+
 def make_session() -> GameSession:
     session = GameSession.new(
         session_id="session-1",
@@ -529,6 +564,17 @@ class ScenarioStorage:
 
     async def save_session(self, session: GameSession) -> None:
         self.session = session
+
+
+class DashboardStorage:
+    def __init__(self, session: GameSession) -> None:
+        self.session = session
+
+    async def load_scenario_scripts(self):
+        return {}
+
+    async def load_saved_sessions(self):
+        return [self.session]
 
 
 async def _collect(generator):

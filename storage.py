@@ -46,6 +46,13 @@ class SessionStorage:
             return
         self._file_put(session.session_id, data)
 
+    async def load_saved_sessions(self) -> list[GameSession]:
+        sessions = []
+        for path in sorted(self.sessions_dir.glob("*.json")):
+            with path.open("r", encoding="utf-8") as file:
+                sessions.append(GameSession.from_dict(json.load(file)))
+        return sessions
+
     async def delete_session(self, session_id: str) -> None:
         await self._kv_put(self._key(session_id), None)
         path = self._file_path(session_id)
