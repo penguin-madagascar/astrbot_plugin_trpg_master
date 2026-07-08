@@ -13,9 +13,9 @@ except ModuleNotFoundError:  # pragma: no cover - tests outside AstrBot.
     logger = logging.getLogger(__name__)
 
 try:
-    from .models import GameSession
+    from .models import CharacterPreset, GameSession
 except ImportError:  # pragma: no cover - direct import outside package.
-    from models import GameSession
+    from models import CharacterPreset, GameSession
 
 
 class SessionStorage:
@@ -23,7 +23,9 @@ class SessionStorage:
         self.context = context
         self.data_dir = Path(data_dir)
         self.sessions_dir = self.data_dir / "sessions"
+        self.presets_dir = self.data_dir / "presets"
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self.presets_dir.mkdir(parents=True, exist_ok=True)
 
     async def load_session(self, session_id: str) -> GameSession | None:
         key = self._key(session_id)
@@ -49,6 +51,32 @@ class SessionStorage:
         path = self._file_path(session_id)
         if path.exists():
             path.unlink()
+
+    async def load_presets(self, owner_id: str) -> dict[str, CharacterPreset]:
+        key = self._preset_key(owner_id)
+        data = await self._kv_get(key)
+        if data is None:
+            data = self._preset_file_get(owner_id)
+        if data is None:
+            return {}
+        if isinstance(data, str):
+            data = json.loads(data)
+        return {
+            str(name): CharacterPreset.from_dict(preset)
+            for name, preset in data.items()
+        }
+
+    async def save_presets(
+        self,
+        owner_id: str,
+        presets: dict[str, CharacterPreset],
+    ) -> None:
+        key = self._preset_key(owner_id)
+        data = {name: preset.to_dict() for name, preset in presets.items()}
+        if not await self._kv_put(key, data):
+            self._preset_file_put(owner_id, data)
+            return
+        self._preset_file_put(owner_id, data)
 
     async def _kv_get(self, key: str) -> Any | None:
         getter = getattr(self.context, "get_kv_data", None)
@@ -96,10 +124,32 @@ class SessionStorage:
         digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
         return self.sessions_dir / f"{digest}.json"
 
+    def _preset_file_get(self, owner_id: str) -> dict[str, Any] | None:
+        path = self._preset_file_path(owner_id)
+        if not path.exists():
+            return None
+        with path.open("r", encoding="utf-8") as file:
+            return json.load(file)
+
+    def _preset_file_put(self, owner_id: str, data: dict[str, Any]) -> None:
+        path = self._preset_file_path(owner_id)
+        with path.open("w", encoding="utf-8", newline="\n") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+
+    def _preset_file_path(self, owner_id: str) -> Path:
+        digest = hashlib.sha256(owner_id.encode("utf-8")).hexdigest()
+        return self.presets_dir / f"{digest}.json"
+
     @staticmethod
     def _key(session_id: str) -> str:
         digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
         return f"trpg_session:{digest}"
+
+    @staticmethod
+    def _preset_key(owner_id: str) -> str:
+        digest = hashlib.sha256(owner_id.encode("utf-8")).hexdigest()
+        return f"trpg_presets:{digest}"
 
 
 async def _maybe_await(value: Any) -> Any:
