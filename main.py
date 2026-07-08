@@ -1256,7 +1256,9 @@ class LLMTRPGPlugin(Star):
         event: AstrMessageEvent,
     ) -> None:
         limit = max(1, _safe_int(self.config.get("max_recent_events"), 20))
+        timeline_limit = _safe_int(self.config.get("max_timeline_events"), 80)
         if len(session.recent_events) <= limit:
+            compact_campaign_knowledge(session, max_timeline=timeline_limit)
             return
         try:
             summary = await call_gm(
@@ -1270,10 +1272,7 @@ class LLMTRPGPlugin(Star):
         except Exception:
             logger.warning("TRPG history summary update failed")
         session.recent_events = session.recent_events[-limit:]
-        compact_campaign_knowledge(
-            session,
-            max_timeline=_safe_int(self.config.get("max_timeline_events"), 80),
-        )
+        compact_campaign_knowledge(session, max_timeline=timeline_limit)
 
     def _turn_current_label(self, session: GameSession) -> str:
         player = current_turn_player(session)

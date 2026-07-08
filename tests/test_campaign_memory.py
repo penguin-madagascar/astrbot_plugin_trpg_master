@@ -303,6 +303,44 @@ def test_trpg_act_applies_knowledge_patches_and_records_deterministic_timeline(m
     assert any("调查钟楼" in entry.summary for entry in session.campaign_knowledge.timeline)
 
 
+def test_trpg_act_compacts_timeline_even_when_recent_events_are_under_limit(monkeypatch):
+    async def fake_call_gm(context, event, *, prompt, system_prompt):
+        return "艾莉丝继续调查。\n```json\n{}\n```"
+
+    monkeypatch.setattr(main, "call_gm", fake_call_gm)
+    session = make_session()
+    session.players["u1"] = PlayerCharacter(
+        user_id="u1",
+        display_name="Dana",
+        character_name="艾莉丝",
+        concept="调查员",
+    )
+    for index in range(4):
+        record_turn_timeline_event(
+            session,
+            actor="艾莉丝",
+            action=f"旧行动 {index}",
+            outcome=f"旧结果 {index}",
+        )
+    plugin = LLMTRPGPlugin(
+        context=object(),
+        config={
+            "strict_json_patch": True,
+            "max_recent_events": 99,
+            "max_timeline_events": 2,
+        },
+    )
+    plugin.storage = FakeStorage(session=session)
+
+    asyncio.run(
+        _collect(plugin.trpg_act(FakeEvent(user_id="u1", sender_name="Dana"), "继续调查"))
+    )
+
+    assert len(session.recent_events) == 1
+    assert len(session.campaign_knowledge.timeline) == 2
+    assert "旧行动 0" in session.campaign_knowledge.archive_summary
+
+
 def test_memory_query_commands_do_not_expose_gm_only_entries():
     session = make_session()
     apply_knowledge_patches(
