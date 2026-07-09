@@ -60,6 +60,8 @@ def test_character_preset_serialization_restores_defaults_and_full_card():
     assert preset.skills == {"潜行": 60}
     assert preset.inventory == ["银钥匙"]
     assert preset.status_effects == ["警觉"]
+    assert preset.ruleset_id == "d20_lite"
+    assert preset.ruleset_data == {}
 
     restored = CharacterPreset.from_dict(preset.to_dict())
 
@@ -86,6 +88,7 @@ def test_character_preset_to_player_character_clones_mutable_fields():
     assert pc.user_id == "u1"
     assert pc.display_name == "Dana"
     assert pc.character_name == "Alice"
+    assert pc.ruleset_id == "d20_lite"
     assert preset.attributes["STR"] == 14
     assert preset.skills["潜行"] == 60
     assert preset.inventory == ["银钥匙"]
@@ -113,6 +116,8 @@ def test_scenario_script_serialization_restores_defaults_and_context():
     assert script.gm_notes == ""
     assert script.tags == ["民俗", "调查"]
     assert script.turn_order_mode == "llm_gm"
+    assert script.ruleset_id == "d20_lite"
+    assert script.rule_nodes == []
     assert script.created_at
     assert script.updated_at
 
@@ -129,6 +134,8 @@ def test_scenario_script_serialization_restores_defaults_and_context():
         "gm_notes": "",
         "tags": ["民俗", "调查"],
         "turn_order_mode": "llm_gm",
+        "ruleset_id": "d20_lite",
+        "rule_nodes": [],
     }
 
 
@@ -171,3 +178,46 @@ def test_game_session_serialization_preserves_scenario_script_context():
     restored = GameSession.from_dict(session.to_dict())
 
     assert restored.scenario_script == script.to_session_context()
+    assert restored.ruleset_id == "d20_lite"
+
+
+def test_models_preserve_ruleset_specific_fields():
+    preset = CharacterPreset.from_dict(
+        {
+            "name": "艾莉丝",
+            "character_name": "Alice",
+            "concept": "调查员",
+            "ruleset_id": "coc7_lite",
+            "ruleset_data": {"luck": "45", "mp": 10},
+        }
+    )
+    script = ScenarioScript.from_dict(
+        {
+            "script_id": "fog-town",
+            "title": "雾镇",
+            "ruleset_id": "coc7_lite",
+            "rule_nodes": [
+                {
+                    "node_id": "library-spot",
+                    "title": "图书馆检定",
+                    "scene": "旧图书馆",
+                    "trigger": "调查书架",
+                    "check": {"type": "skill_check", "skill": "侦查"},
+                    "success": "发现账本。",
+                    "failure": "只发现灰尘。",
+                    "consequence": "失败会消耗时间。",
+                    "tags": ["调查"],
+                }
+            ],
+        }
+    )
+
+    pc = preset.to_player_character(user_id="u1", display_name="Dana")
+
+    assert preset.ruleset_id == "coc7_lite"
+    assert preset.ruleset_data == {"luck": "45", "mp": 10}
+    assert pc.ruleset_id == "coc7_lite"
+    assert pc.ruleset_data == {"luck": "45", "mp": 10}
+    assert script.ruleset_id == "coc7_lite"
+    assert script.rule_nodes[0].node_id == "library-spot"
+    assert script.to_session_context()["rule_nodes"][0]["check"]["skill"] == "侦查"

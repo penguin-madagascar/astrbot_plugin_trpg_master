@@ -15,6 +15,8 @@ DEFAULT_ATTRIBUTES = {
     "CHA": 10,
 }
 
+DEFAULT_RULESET_ID = "d20_lite"
+SUPPORTED_RULESET_IDS = {"d20_lite", "coc7_lite"}
 TURN_ORDER_MODES = {"soft", "llm_gm"}
 TURN_ORDER_PHASES = {"free", "turn_order", "paused"}
 
@@ -31,6 +33,13 @@ def _normalized_skills(values: dict[str, Any] | None) -> dict[str, int]:
 
 def _string_list(values: list[Any] | None) -> list[str]:
     return [str(item) for item in (values or [])]
+
+
+def normalize_ruleset_id(value: Any, default: str = DEFAULT_RULESET_ID) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in SUPPORTED_RULESET_IDS:
+        return normalized
+    return default if default in SUPPORTED_RULESET_IDS else DEFAULT_RULESET_ID
 
 
 def normalize_turn_order_mode(value: Any, default: str = "llm_gm") -> str:
@@ -71,6 +80,8 @@ class PlayerCharacter:
     skills: dict[str, int] = field(default_factory=dict)
     inventory: list[str] = field(default_factory=list)
     status_effects: list[str] = field(default_factory=list)
+    ruleset_id: str = DEFAULT_RULESET_ID
+    ruleset_data: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PlayerCharacter":
@@ -79,6 +90,9 @@ class PlayerCharacter:
         payload["skills"] = _normalized_skills(payload.get("skills"))
         payload["inventory"] = _string_list(payload.get("inventory"))
         payload["status_effects"] = _string_list(payload.get("status_effects"))
+        payload["ruleset_id"] = normalize_ruleset_id(payload.get("ruleset_id"))
+        ruleset_data = payload.get("ruleset_data")
+        payload["ruleset_data"] = dict(ruleset_data) if isinstance(ruleset_data, dict) else {}
         return cls(**payload)
 
     def to_dict(self) -> dict[str, Any]:
@@ -96,6 +110,8 @@ class CharacterPreset:
     skills: dict[str, int] = field(default_factory=dict)
     inventory: list[str] = field(default_factory=list)
     status_effects: list[str] = field(default_factory=list)
+    ruleset_id: str = DEFAULT_RULESET_ID
+    ruleset_data: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.name = str(self.name)
@@ -107,6 +123,8 @@ class CharacterPreset:
         self.skills = _normalized_skills(self.skills)
         self.inventory = _string_list(self.inventory)
         self.status_effects = _string_list(self.status_effects)
+        self.ruleset_id = normalize_ruleset_id(self.ruleset_id)
+        self.ruleset_data = dict(self.ruleset_data or {})
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "CharacterPreset":
@@ -122,6 +140,8 @@ class CharacterPreset:
             skills=payload.get("skills") or {},
             inventory=payload.get("inventory") or [],
             status_effects=payload.get("status_effects") or [],
+            ruleset_id=str(payload.get("ruleset_id") or DEFAULT_RULESET_ID),
+            ruleset_data=payload.get("ruleset_data") or {},
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -144,6 +164,8 @@ class CharacterPreset:
             skills=dict(self.skills),
             inventory=list(self.inventory),
             status_effects=list(self.status_effects),
+            ruleset_id=self.ruleset_id,
+            ruleset_data=dict(self.ruleset_data),
         )
 
 
@@ -191,6 +213,48 @@ class TurnOrderState:
 
 
 @dataclass
+class RuleNode:
+    node_id: str
+    title: str
+    scene: str = ""
+    trigger: str = ""
+    check: dict[str, Any] = field(default_factory=dict)
+    success: str = ""
+    failure: str = ""
+    consequence: str = ""
+    tags: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.node_id = str(self.node_id or _new_rule_node_id()).strip()
+        self.title = str(self.title or self.node_id).strip()
+        self.scene = str(self.scene or "").strip()
+        self.trigger = str(self.trigger or "").strip()
+        self.check = dict(self.check or {})
+        self.success = str(self.success or "").strip()
+        self.failure = str(self.failure or "").strip()
+        self.consequence = str(self.consequence or "").strip()
+        self.tags = _string_list(self.tags)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RuleNode":
+        payload = dict(data)
+        return cls(
+            node_id=str(payload.get("node_id") or payload.get("id") or ""),
+            title=str(payload.get("title") or payload.get("name") or ""),
+            scene=str(payload.get("scene") or ""),
+            trigger=str(payload.get("trigger") or ""),
+            check=payload.get("check") or {},
+            success=str(payload.get("success") or payload.get("success_text") or ""),
+            failure=str(payload.get("failure") or payload.get("failure_text") or ""),
+            consequence=str(payload.get("consequence") or ""),
+            tags=payload.get("tags") or [],
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ScenarioScript:
     script_id: str
     title: str
@@ -203,6 +267,8 @@ class ScenarioScript:
     gm_notes: str = ""
     tags: list[str] = field(default_factory=list)
     turn_order_mode: str = "llm_gm"
+    ruleset_id: str = DEFAULT_RULESET_ID
+    rule_nodes: list[RuleNode] = field(default_factory=list)
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
 
@@ -218,6 +284,12 @@ class ScenarioScript:
         self.gm_notes = str(self.gm_notes or "").strip()
         self.tags = _string_list(self.tags)
         self.turn_order_mode = normalize_turn_order_mode(self.turn_order_mode)
+        self.ruleset_id = normalize_ruleset_id(self.ruleset_id)
+        self.rule_nodes = [
+            item if isinstance(item, RuleNode) else RuleNode.from_dict(item)
+            for item in (self.rule_nodes or [])
+            if isinstance(item, (RuleNode, dict))
+        ]
         self.created_at = str(self.created_at or utc_now_iso())
         self.updated_at = str(self.updated_at or self.created_at or utc_now_iso())
 
@@ -238,6 +310,8 @@ class ScenarioScript:
             gm_notes=str(payload.get("gm_notes") or ""),
             tags=payload.get("tags") or [],
             turn_order_mode=str(payload.get("turn_order_mode") or "llm_gm"),
+            ruleset_id=str(payload.get("ruleset_id") or DEFAULT_RULESET_ID),
+            rule_nodes=payload.get("rule_nodes") or [],
             created_at=created_at,
             updated_at=str(payload.get("updated_at") or created_at),
         )
@@ -256,6 +330,8 @@ class ScenarioScript:
             "gm_notes": self.gm_notes,
             "tags": list(self.tags),
             "turn_order_mode": self.turn_order_mode,
+            "ruleset_id": self.ruleset_id,
+            "rule_nodes": [node.to_dict() for node in self.rule_nodes],
         }
 
 
@@ -698,6 +774,7 @@ class GameSession:
     title: str
     theme: str
     language: str
+    ruleset_id: str = DEFAULT_RULESET_ID
     status: str = "running"
     turn_count: int = 0
     players: dict[str, PlayerCharacter] = field(default_factory=dict)
@@ -720,12 +797,14 @@ class GameSession:
         title: str,
         theme: str,
         language: str,
+        ruleset_id: str = DEFAULT_RULESET_ID,
     ) -> "GameSession":
         return cls(
             session_id=session_id,
             title=title,
             theme=theme,
             language=language or "zh",
+            ruleset_id=normalize_ruleset_id(ruleset_id),
             scene={"location": "", "description": ""},
         )
 
@@ -733,6 +812,7 @@ class GameSession:
     def from_dict(cls, data: dict[str, Any]) -> "GameSession":
         payload = dict(data)
         payload["language"] = str(payload.get("language") or "zh")
+        payload["ruleset_id"] = normalize_ruleset_id(payload.get("ruleset_id"))
         payload["players"] = {
             str(user_id): PlayerCharacter.from_dict(player)
             for user_id, player in payload.get("players", {}).items()
@@ -760,6 +840,7 @@ class GameSession:
             "title": self.title,
             "theme": self.theme,
             "language": self.language,
+            "ruleset_id": self.ruleset_id,
             "status": self.status,
             "turn_count": self.turn_count,
             "players": {
@@ -802,6 +883,10 @@ class GameSession:
 
 
 def _new_script_id() -> str:
+    return uuid4().hex[:12]
+
+
+def _new_rule_node_id() -> str:
     return uuid4().hex[:12]
 
 
