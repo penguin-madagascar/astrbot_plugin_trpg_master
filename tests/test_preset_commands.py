@@ -77,6 +77,7 @@ def test_format_preset_includes_complete_character_card():
     text = _format_preset("zh", preset)
 
     assert "角色预设: 艾莉丝" in text
+    assert "Ruleset: d20_lite" in text
     assert "Character: Alice" in text
     assert "Concept: 敏捷的游侠" in text
     assert "HP: 12 / SAN: 48" in text
@@ -84,6 +85,25 @@ def test_format_preset_includes_complete_character_card():
     assert "潜行 60" in text
     assert "Inventory: 银钥匙" in text
     assert "Status: 警觉" in text
+
+
+def test_format_preset_uses_coc7_ruleset_specific_card():
+    preset = CharacterPreset(
+        name="艾莉丝",
+        character_name="Alice",
+        concept="调查员",
+        ruleset_id="coc7_lite",
+        hp=12,
+        san=48,
+        skills={"侦查": 55},
+        ruleset_data={"luck": 45, "mp": 10},
+    )
+
+    text = _format_preset("zh", preset)
+
+    assert "Ruleset: coc7_lite" in text
+    assert "Investigator: Alice" in text
+    assert "Resources: luck 45, mp 10" in text
 
 
 def _assert_value_error(callback):
@@ -128,6 +148,38 @@ def test_trpg_join_can_use_sender_owned_preset():
     assert pc.character_name == "Alice"
     assert pc.concept == "敏捷的游侠"
     assert pc.inventory == ["银钥匙"]
+    assert pc.ruleset_id == "d20_lite"
+
+
+def test_trpg_join_rejects_preset_with_different_ruleset():
+    session = GameSession.new(
+        session_id="session-1",
+        title="雾镇",
+        theme="民俗恐怖",
+        language="zh",
+        ruleset_id="coc7_lite",
+    )
+    storage = FakeStorage(
+        session=session,
+        presets={
+            "u1": {
+                "艾莉丝": CharacterPreset(
+                    name="艾莉丝",
+                    character_name="Alice",
+                    concept="敏捷的游侠",
+                    ruleset_id="d20_lite",
+                )
+            }
+        },
+    )
+    plugin = LLMTRPGPlugin(context=object())
+    plugin.storage = storage
+    event = FakeEvent(user_id="u1", sender_name="Dana")
+
+    outputs = asyncio.run(_collect(plugin.trpg_join(event, "preset:艾莉丝")))
+
+    assert outputs == ["角色预设规则不匹配：艾莉丝 是 d20_lite，当前跑团是 coc7_lite。"]
+    assert "u1" not in session.players
 
 
 def test_trpg_join_keeps_existing_character_creation_syntax():
@@ -147,6 +199,7 @@ def test_trpg_join_keeps_existing_character_creation_syntax():
     assert outputs == ["角色已加入：鲍勃（HP 10 / SAN 50）"]
     assert pc.character_name == "鲍勃"
     assert pc.concept == "勇敢的战士"
+    assert pc.ruleset_id == "d20_lite"
 
 
 def test_trpg_preset_create_update_list_and_show():

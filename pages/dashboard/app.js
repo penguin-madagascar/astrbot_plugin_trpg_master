@@ -31,6 +31,7 @@ const els = {
 const scriptFields = {
   title: document.getElementById("script-title"),
   language: document.getElementById("script-language"),
+  ruleset_id: document.getElementById("script-ruleset-id"),
   turn_order_mode: document.getElementById("script-turn-order-mode"),
   theme: document.getElementById("script-theme"),
   summary: document.getElementById("script-summary"),
@@ -39,6 +40,7 @@ const scriptFields = {
   hooks: document.getElementById("script-hooks"),
   tags: document.getElementById("script-tags"),
   gm_notes: document.getElementById("script-notes"),
+  rule_nodes: document.getElementById("script-rule-nodes"),
 };
 
 function showStatus(message, isError = false) {
@@ -155,10 +157,14 @@ function renderScripts() {
     const title = document.createElement("strong");
     title.textContent = script.title || "未命名剧本";
     const meta = document.createElement("span");
-    meta.textContent = `${script.language || "zh"} · ${turnOrderModeLabel(script.turn_order_mode)} · ${script.theme || script.title || ""}`;
+    meta.textContent = `${script.language || "zh"} · ${rulesetLabel(script.ruleset_id)} · ${turnOrderModeLabel(script.turn_order_mode)} · ${script.theme || script.title || ""}`;
     button.append(title, meta);
     els.scripts.append(button);
   });
+}
+
+function rulesetLabel(rulesetId) {
+  return rulesetId === "coc7_lite" ? "CoC 7e Lite" : "d20 Lite";
 }
 
 function turnOrderModeLabel(mode) {
@@ -217,6 +223,7 @@ function selectScript(scriptId) {
   state.currentScriptId = script.script_id;
   scriptFields.title.value = script.title || "";
   scriptFields.language.value = script.language || "zh";
+  scriptFields.ruleset_id.value = script.ruleset_id || "d20_lite";
   scriptFields.turn_order_mode.value = script.turn_order_mode || "llm_gm";
   scriptFields.theme.value = script.theme || "";
   scriptFields.summary.value = script.summary || "";
@@ -225,6 +232,7 @@ function selectScript(scriptId) {
   scriptFields.hooks.value = (script.hooks || []).join("\n");
   scriptFields.tags.value = (script.tags || []).join(", ");
   scriptFields.gm_notes.value = script.gm_notes || "";
+  scriptFields.rule_nodes.value = formatRuleNodes(script.rule_nodes || []);
   els.deleteScript.disabled = false;
   renderScripts();
 }
@@ -235,7 +243,9 @@ function startNewScript() {
     field.value = "";
   });
   scriptFields.language.value = "zh";
+  scriptFields.ruleset_id.value = "d20_lite";
   scriptFields.turn_order_mode.value = "llm_gm";
+  scriptFields.rule_nodes.value = "[]";
   els.deleteScript.disabled = true;
   renderScripts();
 }
@@ -244,6 +254,7 @@ function collectScriptPayload() {
   const payload = {
     title: scriptFields.title.value.trim(),
     language: scriptFields.language.value,
+    ruleset_id: scriptFields.ruleset_id.value,
     turn_order_mode: scriptFields.turn_order_mode.value,
     theme: scriptFields.theme.value.trim(),
     summary: scriptFields.summary.value.trim(),
@@ -252,6 +263,7 @@ function collectScriptPayload() {
     hooks: splitLines(scriptFields.hooks.value),
     gm_notes: scriptFields.gm_notes.value.trim(),
     tags: splitTags(scriptFields.tags.value),
+    rule_nodes: parseRuleNodes(scriptFields.rule_nodes.value),
   };
   if (state.currentScriptId) {
     payload.script_id = state.currentScriptId;
@@ -271,6 +283,25 @@ function splitTags(value) {
     .split(/[,，、]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function formatRuleNodes(ruleNodes) {
+  return JSON.stringify(ruleNodes || [], null, 2);
+}
+
+function parseRuleNodes(value) {
+  const text = value.trim();
+  if (!text) {
+    return [];
+  }
+  const parsed = JSON.parse(text);
+  if (Array.isArray(parsed)) {
+    return parsed.filter((item) => item && typeof item === "object" && !Array.isArray(item));
+  }
+  if (parsed && typeof parsed === "object") {
+    return [parsed];
+  }
+  throw new Error("检定节点必须是 JSON 对象或对象数组。");
 }
 
 async function saveScript(event) {

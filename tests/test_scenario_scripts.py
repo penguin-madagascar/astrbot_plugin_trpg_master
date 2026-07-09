@@ -9,7 +9,7 @@ from main import (
     _coerce_config_updates,
     _parse_scenario_import,
 )
-from models import ScenarioScript
+from models import GameSession, ScenarioScript
 
 
 def test_parse_scenario_json_import_accepts_single_script():
@@ -101,6 +101,36 @@ invalid
     assert script.turn_order_mode == "llm_gm"
 
 
+def test_parse_scenario_markdown_import_supports_ruleset_and_rule_nodes():
+    markdown = """
+# 雾镇
+
+## 规则
+coc7_lite
+
+## 检定节点
+[
+  {
+    "node_id": "library-spot",
+    "title": "图书馆检定",
+    "scene": "旧图书馆",
+    "trigger": "调查书架",
+    "check": {"type": "skill_check", "skill": "侦查"},
+    "success": "发现账本。",
+    "failure": "只发现灰尘。",
+    "consequence": "失败会消耗时间。",
+    "tags": ["调查"]
+  }
+]
+""".strip()
+
+    script = _parse_scenario_import(markdown, filename="fog.md")[0]
+
+    assert script.ruleset_id == "coc7_lite"
+    assert script.rule_nodes[0].node_id == "library-spot"
+    assert script.rule_nodes[0].check == {"type": "skill_check", "skill": "侦查"}
+
+
 def test_coerce_config_updates_accepts_schema_keys_and_basic_types():
     schema = {
         "default_theme": {"type": "string"},
@@ -154,6 +184,19 @@ def test_dashboard_exposes_script_turn_order_mode_field():
     assert "turnOrderModeLabel(script.turn_order_mode)" in js
 
 
+def test_dashboard_exposes_script_ruleset_and_rule_nodes_fields():
+    html = Path("pages/dashboard/index.html").read_text(encoding="utf-8")
+    js = Path("pages/dashboard/app.js").read_text(encoding="utf-8")
+
+    assert 'id="script-ruleset-id"' in html
+    assert 'value="d20_lite"' in html
+    assert 'value="coc7_lite"' in html
+    assert 'id="script-rule-nodes"' in html
+    assert "ruleset_id: document.getElementById(\"script-ruleset-id\")" in js
+    assert "rule_nodes: parseRuleNodes(scriptFields.rule_nodes.value)" in js
+    assert "formatRuleNodes(script.rule_nodes || [])" in js
+
+
 def test_trpg_start_uses_matching_scenario_script(monkeypatch):
     captured = {}
 
@@ -173,6 +216,20 @@ def test_trpg_start_uses_matching_scenario_script(monkeypatch):
         hooks=["钟楼停摆", "旧井低语"],
         gm_notes="慢节奏调查。",
         turn_order_mode="soft",
+        ruleset_id="coc7_lite",
+        rule_nodes=[
+            {
+                "node_id": "library-spot",
+                "title": "图书馆检定",
+                "scene": "旧图书馆",
+                "trigger": "调查书架",
+                "check": {"type": "skill_check", "skill": "侦查"},
+                "success": "发现账本。",
+                "failure": "只发现灰尘。",
+                "consequence": "失败会消耗时间。",
+                "tags": ["调查"],
+            }
+        ],
     )
     storage = FakeStorage({"fog-town": script})
     plugin = LLMTRPGPlugin(
@@ -187,15 +244,20 @@ def test_trpg_start_uses_matching_scenario_script(monkeypatch):
     assert storage.session.title == "雾镇"
     assert storage.session.theme == "民俗恐怖"
     assert storage.session.language == "zh"
+    assert storage.session.ruleset_id == "coc7_lite"
     assert storage.session.turn_order.enabled is True
     assert storage.session.turn_order.mode == "soft"
     assert storage.session.scenario_script["script_id"] == "fog-town"
     assert storage.session.scenario_script["turn_order_mode"] == "soft"
+    assert storage.session.scenario_script["ruleset_id"] == "coc7_lite"
+    assert storage.session.scenario_script["rule_nodes"][0]["title"] == "图书馆检定"
     assert "被浓雾封锁的小镇。" in captured["prompt"]
     assert "十年前的火灾仍无人提起。" in captured["prompt"]
     assert "玩家在祠堂醒来。" in captured["prompt"]
     assert "钟楼停摆" in captured["prompt"]
     assert "慢节奏调查。" in captured["prompt"]
+    assert "CoC 7e Lite" in captured["prompt"]
+    assert "图书馆检定" in captured["prompt"]
 
 
 def test_trpg_start_keeps_free_theme_when_no_scenario_matches(monkeypatch):
@@ -210,7 +272,11 @@ def test_trpg_start_keeps_free_theme_when_no_scenario_matches(monkeypatch):
     storage = FakeStorage({"fog-town": script})
     plugin = LLMTRPGPlugin(
         context=object(),
-        config={"turn_order_enabled": True, "turn_order_mode": "soft"},
+        config={
+            "turn_order_enabled": True,
+            "turn_order_mode": "soft",
+            "default_ruleset_id": "coc7_lite",
+        },
     )
     plugin.storage = storage
 
@@ -219,11 +285,41 @@ def test_trpg_start_keeps_free_theme_when_no_scenario_matches(monkeypatch):
     assert outputs == ["自由开场。"]
     assert storage.session.title == "海上奇遇"
     assert storage.session.theme == "海上奇遇"
+    assert storage.session.ruleset_id == "coc7_lite"
     assert storage.session.turn_order.enabled is True
     assert storage.session.turn_order.mode == "soft"
     assert storage.session.scenario_script is None
     assert "主题：海上奇遇" in captured["prompt"]
     assert "被浓雾封锁的小镇" not in captured["prompt"]
+
+
+def test_trpg_status_includes_ruleset_and_script_rule_nodes():
+    session = GameSession.new(
+        session_id="session-1",
+        title="雾镇",
+        theme="民俗恐怖",
+        language="zh",
+        ruleset_id="coc7_lite",
+    )
+    script = ScenarioScript(
+        script_id="fog-town",
+        title="雾镇",
+        ruleset_id="coc7_lite",
+        rule_nodes=[
+            {
+                "node_id": "library-spot",
+                "title": "图书馆检定",
+                "check": {"type": "skill_check", "skill": "侦查"},
+            }
+        ],
+    )
+    session.scenario_script = script.to_session_context()
+    plugin = LLMTRPGPlugin(context=object())
+
+    text = plugin._format_status(session)
+
+    assert "Ruleset: coc7_lite" in text
+    assert "Rule Nodes:\n- 图书馆检定" in text
 
 
 class RegisteringContext:

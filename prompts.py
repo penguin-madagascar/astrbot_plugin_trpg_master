@@ -6,9 +6,11 @@ from typing import Any
 try:
     from .models import GameSession
     from .memory import build_memory_context
+    from .rules import get_ruleset
 except ImportError:  # pragma: no cover - direct import outside package.
     from models import GameSession
     from memory import build_memory_context
+    from rules import get_ruleset
 
 
 LANGUAGE_NAMES = {
@@ -37,8 +39,15 @@ PATCH_SCHEMA = {
             "id": "check1",
             "type": "skill_check",
             "actor": "角色名",
+            "stat": "",
             "skill": "DEX",
             "dc": 12,
+            "difficulty": "",
+            "advantage": "",
+            "bonus_dice": 0,
+            "penalty_dice": 0,
+            "opponent": "",
+            "script_check_id": "",
             "reason": "躲避落石",
         }
     ],
@@ -47,6 +56,7 @@ PATCH_SCHEMA = {
             "target": "pc:角色名",
             "op": "hp_delta",
             "value": -1,
+            "field": "",
             "reason": "碎石擦伤",
         }
     ],
@@ -102,6 +112,7 @@ def session_snapshot(session: GameSession) -> dict[str, Any]:
         "title": session.title,
         "theme": session.theme,
         "language": session.language,
+        "ruleset_id": session.ruleset_id,
         "status": session.status,
         "turn_count": session.turn_count,
         "scene": session.scene,
@@ -112,10 +123,12 @@ def session_snapshot(session: GameSession) -> dict[str, Any]:
                 "concept": player.concept,
                 "hp": player.hp,
                 "san": player.san,
+                "ruleset_id": player.ruleset_id,
                 "attributes": player.attributes,
                 "skills": player.skills,
                 "inventory": player.inventory,
                 "status_effects": player.status_effects,
+                "ruleset_data": player.ruleset_data,
             }
             for player in session.players.values()
         },
@@ -132,9 +145,11 @@ def build_opening_prompt(session: GameSession) -> str:
     language = language_name(session.language)
     scenario = _format_scenario_context(session.scenario_script)
     scenario_part = f"\n剧本资料：\n{scenario}\n" if scenario else ""
+    ruleset = _format_ruleset_context(session)
     return (
         f"本次 session 的输出语言是 {language}。\n"
         f"主题：{session.theme}\n"
+        f"规则系统：\n{ruleset}\n"
         f"{scenario_part}"
         "请生成跑团开场，只输出面向玩家的叙事文本，不要输出 JSON。\n"
         "需要包含当前场景、主要威胁、可行动线索。不要给出固定选项，不要替玩家做决定。"
@@ -145,6 +160,7 @@ def build_action_prompt(session: GameSession, actor: str, action: str) -> str:
     language = language_name(session.language)
     snapshot = json.dumps(session_snapshot(session), ensure_ascii=False, indent=2)
     schema = json.dumps(PATCH_SCHEMA, ensure_ascii=False, indent=2)
+    ruleset = _format_ruleset_context(session)
     memory_context = build_memory_context(
         session,
         actor=actor,
@@ -156,6 +172,8 @@ def build_action_prompt(session: GameSession, actor: str, action: str) -> str:
         "除 JSON key 外，叙事、NPC 台词、reason、memory_notes、plot_threads 都必须使用该语言。\n"
         "JSON key 必须保持英文。\n"
         "不要写死骰子结果。不要直接修改角色状态，只能提出 state_patches。\n"
+        "规则系统和检定节点如下；dice_requests 必须匹配当前规则系统。\n"
+        f"{ruleset}\n"
         "请用 knowledge_patches 维护长期战役知识库：人物、地点、线索、秘密、时间线、承诺、伏笔和未解决冲突。"
         "visibility 可用 public/private/gm_only；不得通过玩家可见叙事泄露 gm_only 内容。\n"
         "如果 turn_order.mode 是 llm_gm，请用 turn_controls 主持行动顺序；可用 op 包括 "
@@ -248,6 +266,48 @@ def _format_scenario_context(scenario: dict[str, Any] | None) -> str:
     tags = [str(item) for item in scenario.get("tags", []) if str(item).strip()]
     if tags:
         lines.append(f"标签：{', '.join(tags)}")
+    rule_nodes = [
+        item for item in scenario.get("rule_nodes", []) if isinstance(item, dict)
+    ]
+    if rule_nodes:
+        node_lines = []
+        for node in rule_nodes:
+            title = str(node.get("title") or node.get("node_id") or "").strip()
+            trigger = str(node.get("trigger") or "").strip()
+            check = node.get("check") if isinstance(node.get("check"), dict) else {}
+            check_text = json.dumps(check, ensure_ascii=False, sort_keys=True)
+            node_lines.append(
+                f"- {title}"
+                + (f"；触发：{trigger}" if trigger else "")
+                + (f"；检定：{check_text}" if check else "")
+            )
+        lines.append("剧本检定节点：\n" + "\n".join(node_lines))
+    return "\n".join(lines)
+
+
+def _format_ruleset_context(session: GameSession) -> str:
+    ruleset = get_ruleset(session.ruleset_id)
+    lines = [
+        f"{ruleset.name} ({ruleset.ruleset_id})",
+        f"说明：{ruleset.summary}",
+        f"可用检定：{', '.join(ruleset.check_types)}",
+    ]
+    scenario = session.scenario_script if isinstance(session.scenario_script, dict) else {}
+    rule_nodes = [
+        item for item in scenario.get("rule_nodes", []) if isinstance(item, dict)
+    ]
+    if rule_nodes:
+        lines.append("剧本检定节点：")
+        for node in rule_nodes:
+            title = str(node.get("title") or node.get("node_id") or "").strip()
+            trigger = str(node.get("trigger") or "").strip()
+            check = node.get("check") if isinstance(node.get("check"), dict) else {}
+            check_text = json.dumps(check, ensure_ascii=False, sort_keys=True)
+            lines.append(
+                f"- {title}"
+                + (f"；触发：{trigger}" if trigger else "")
+                + (f"；检定：{check_text}" if check else "")
+            )
     return "\n".join(lines)
 
 

@@ -106,6 +106,7 @@ try:
         GameSession,
         PlayerCharacter,
         ScenarioScript,
+        normalize_ruleset_id,
         normalize_turn_order_mode,
         utc_now_iso,
     )
@@ -117,7 +118,7 @@ try:
         build_resolution_prompt,
         build_summary_prompt,
     )
-    from .rules import resolve_check_request
+    from .rules import get_ruleset, resolve_check_request
     from .state import apply_state_patches
     from .storage import SessionStorage
     from .turn_order import (
@@ -151,6 +152,7 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         GameSession,
         PlayerCharacter,
         ScenarioScript,
+        normalize_ruleset_id,
         normalize_turn_order_mode,
         utc_now_iso,
     )
@@ -162,7 +164,7 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         build_resolution_prompt,
         build_summary_prompt,
     )
-    from rules import resolve_check_request
+    from rules import get_ruleset, resolve_check_request
     from state import apply_state_patches
     from storage import SessionStorage
     from turn_order import (
@@ -203,6 +205,7 @@ MESSAGES = {
         "preset_empty": "你还没有角色预设。",
         "preset_list_title": "你的角色预设：",
         "preset_updated": "角色预设已更新：{name}（{change}）",
+        "preset_ruleset_mismatch": "角色预设规则不匹配：{name} 是 {preset_ruleset}，当前跑团是 {session_ruleset}。",
         "status_title": "跑团状态",
         "act_usage": "用法：/trpg_act 行动内容",
         "turn_usage": "用法：/trpg_turn [done|next]",
@@ -246,6 +249,7 @@ MESSAGES = {
         "preset_empty": "You do not have any character presets.",
         "preset_list_title": "Your character presets:",
         "preset_updated": "Character preset updated: {name} ({change})",
+        "preset_ruleset_mismatch": "Character preset ruleset mismatch: {name} is {preset_ruleset}, current session is {session_ruleset}.",
         "status_title": "Session Status",
         "act_usage": "Usage: /trpg_act action",
         "turn_usage": "Usage: /trpg_turn [done|next]",
@@ -429,11 +433,17 @@ class LLMTRPGPlugin(Star):
             if script
             else detect_language_from_theme(raw_theme) if raw_theme else "zh"
         )
+        ruleset_id = (
+            script.ruleset_id
+            if script
+            else normalize_ruleset_id(self.config.get("default_ruleset_id") or "d20_lite")
+        )
         session = GameSession.new(
             session_id=_session_id(event),
             title=session_title,
             theme=session_theme,
             language=language,
+            ruleset_id=ruleset_id,
         )
         turn_enabled = True if script else _config_bool(self.config, "turn_order_enabled", True)
         turn_mode = (
@@ -499,6 +509,17 @@ class LLMTRPGPlugin(Star):
                         _msg(session.language, "preset_not_found", name=preset_name)
                     )
                     return
+                if preset.ruleset_id != session.ruleset_id:
+                    yield event.plain_result(
+                        _msg(
+                            session.language,
+                            "preset_ruleset_mismatch",
+                            name=preset.name,
+                            preset_ruleset=preset.ruleset_id,
+                            session_ruleset=session.ruleset_id,
+                        )
+                    )
+                    return
                 pc = preset.to_player_character(
                     user_id=user_id,
                     display_name=_sender_name(event),
@@ -532,6 +553,7 @@ class LLMTRPGPlugin(Star):
                 display_name=_sender_name(event),
                 character_name=character_name,
                 concept=concept,
+                ruleset_id=session.ruleset_id,
             )
             session.players[user_id] = pc
             add_player_to_turn_order(session, user_id)
@@ -1425,18 +1447,8 @@ class LLMTRPGPlugin(Star):
         )
 
     def _format_pc(self, language: str, pc: PlayerCharacter) -> str:
-        attrs = ", ".join(f"{key} {value}" for key, value in pc.attributes.items())
-        inventory = ", ".join(pc.inventory) if pc.inventory else "-"
-        status = ", ".join(pc.status_effects) if pc.status_effects else "-"
-        return (
-            f"{_msg(language, 'pc_title')}: {pc.character_name}\n"
-            f"Player: {pc.display_name}\n"
-            f"Concept: {pc.concept}\n"
-            f"HP: {pc.hp} / SAN: {pc.san}\n"
-            f"Attributes: {attrs}\n"
-            f"Inventory: {inventory}\n"
-            f"Status: {status}"
-        )
+        card = get_ruleset(pc.ruleset_id).format_character(pc)
+        return f"{_msg(language, 'pc_title')}: {pc.character_name}\n{card}"
 
     def _format_status(self, session: GameSession) -> str:
         players = "\n".join(
@@ -1457,11 +1469,13 @@ class LLMTRPGPlugin(Star):
         return (
             f"{_msg(session.language, 'status_title')}: {session.title}\n"
             f"Language: {session.language}\n"
+            f"Ruleset: {session.ruleset_id}\n"
             f"Turn: {session.turn_count}\n"
             f"Scene: {scene}\n"
             f"Players:\n{players}\n"
             f"NPCs:\n{npcs}\n"
             f"Plot Threads:\n{threads}\n"
+            f"Rule Nodes:\n{_format_session_rule_nodes(session)}\n"
             f"{turn_order}\n"
             f"Summary: {session.history_summary or '-'}"
         )
@@ -1522,19 +1536,20 @@ def _format_roll_text(language: str, result: Any) -> str:
 
 
 def _format_preset(language: str, preset: CharacterPreset) -> str:
-    attrs = ", ".join(f"{key} {value}" for key, value in preset.attributes.items())
-    skills = ", ".join(f"{key} {value}" for key, value in preset.skills.items()) or "-"
-    inventory = ", ".join(preset.inventory) if preset.inventory else "-"
-    status = ", ".join(preset.status_effects) if preset.status_effects else "-"
-    return (
-        f"{_msg(language, 'preset_title')}: {preset.name}\n"
-        f"Character: {preset.character_name}\n"
-        f"Concept: {preset.concept}\n"
-        f"HP: {preset.hp} / SAN: {preset.san}\n"
-        f"Attributes: {attrs}\n"
-        f"Skills: {skills}\n"
-        f"Inventory: {inventory}\n"
-        f"Status: {status}"
+    pc = preset.to_player_character(user_id="", display_name="")
+    return f"{_msg(language, 'preset_title')}: {preset.name}\n" + get_ruleset(
+        preset.ruleset_id
+    ).format_character(pc)
+
+
+def _format_session_rule_nodes(session: GameSession) -> str:
+    scenario = session.scenario_script if isinstance(session.scenario_script, dict) else {}
+    nodes = [item for item in scenario.get("rule_nodes", []) if isinstance(item, dict)]
+    if not nodes:
+        return "- none"
+    return "\n".join(
+        f"- {str(node.get('title') or node.get('node_id') or 'untitled')}"
+        for node in nodes
     )
 
 
@@ -1836,6 +1851,8 @@ def _parse_markdown_scenario(markdown: str) -> ScenarioScript:
         gm_notes=gm_notes,
         tags=tags,
         turn_order_mode=_section_text(sections, "turn_order_mode") or "llm_gm",
+        ruleset_id=_section_text(sections, "ruleset_id") or "d20_lite",
+        rule_nodes=_parse_markdown_rule_nodes(_section_text(sections, "rule_nodes")),
     )
 
 
@@ -1865,6 +1882,16 @@ def _markdown_section_key(value: str) -> str:
         "turn_order_mode": "turn_order_mode",
         "turn order": "turn_order_mode",
         "turn mode": "turn_order_mode",
+        "规则": "ruleset_id",
+        "规则系统": "ruleset_id",
+        "ruleset": "ruleset_id",
+        "ruleset_id": "ruleset_id",
+        "rule set": "ruleset_id",
+        "检定节点": "rule_nodes",
+        "规则节点": "rule_nodes",
+        "rule_nodes": "rule_nodes",
+        "rule nodes": "rule_nodes",
+        "checks": "rule_nodes",
         "gm 备注": "gm_notes",
         "gm备注": "gm_notes",
         "gm notes": "gm_notes",
@@ -1886,6 +1913,21 @@ def _markdown_list_items(value: str) -> list[str]:
         if item:
             items.append(item)
     return items
+
+
+def _parse_markdown_rule_nodes(value: str) -> list[dict[str, Any]]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, dict):
+        return [payload]
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    return []
 
 
 def _coerce_config_updates(

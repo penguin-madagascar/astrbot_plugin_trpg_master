@@ -5,6 +5,12 @@
     "hint": "当 /trpg_start 后没有填写主题时使用；该情况下 session language 固定为 zh。",
     "default": "奇幻冒险"
   },
+  "default_ruleset_id": {
+    "type": "string",
+    "description": "默认规则系统",
+    "hint": "自由主题跑团使用；剧本中的 ruleset_id 会覆盖该值。可用值：d20_lite、coc7_lite。",
+    "default": "d20_lite"
+  },
   "gm_system_prompt": {
     "type": "text",
     "description": "GM 系统提示词",

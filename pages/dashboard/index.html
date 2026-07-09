@@ -69,6 +69,16 @@
                     <option value="ko">한국어</option>
                   </select>
                 </label>
+                <label class="field" for="script-ruleset-id">
+                  <span>规则系统</span>
+                  <select id="script-ruleset-id" name="ruleset_id">
+                    <option value="d20_lite">d20 Lite</option>
+                    <option value="coc7_lite">CoC 7e Lite</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="grid two">
                 <label class="field" for="script-turn-order-mode">
                   <span>行动顺序模式</span>
                   <select id="script-turn-order-mode" name="turn_order_mode">
@@ -112,6 +122,11 @@
               <label class="field" for="script-notes">
                 <span>GM 备注</span>
                 <textarea id="script-notes" name="gm_notes" rows="5"></textarea>
+              </label>
+
+              <label class="field" for="script-rule-nodes">
+                <span>检定节点 JSON</span>
+                <textarea id="script-rule-nodes" name="rule_nodes" rows="8"></textarea>
               </label>
             </form>
           </section>
