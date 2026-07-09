@@ -11,8 +11,10 @@ except ModuleNotFoundError:  # pragma: no cover - unit tests outside AstrBot.
 
 try:
     from .models import GameSession, PlayerCharacter
+    from .rules import apply_ruleset_state_patch
 except ImportError:  # pragma: no cover - direct test import outside package.
     from models import GameSession, PlayerCharacter
+    from rules import apply_ruleset_state_patch
 
 
 ALLOWED_PATCH_OPS = {
@@ -46,14 +48,25 @@ def apply_state_patches(
         if not target.startswith("pc:"):
             results.append(_skip(target, op, "unsupported target"))
             continue
-        if op not in ALLOWED_PATCH_OPS:
-            results.append(_skip(target, op, "unsupported op"))
-            continue
-
         pc = session.player_by_character_name(target[3:])
         if pc is None:
             logger.warning("TRPG state patch skipped: PC not found: %s", target)
             results.append(_skip(target, op, "pc not found"))
+            continue
+
+        if op not in ALLOWED_PATCH_OPS:
+            delegated = apply_ruleset_state_patch(session, patch)
+            if delegated.applied:
+                results.append(
+                    PatchApplyResult(
+                        applied=True,
+                        target=delegated.target,
+                        op=delegated.op,
+                        message=delegated.message,
+                    )
+                )
+            else:
+                results.append(_skip(target, op, delegated.message))
             continue
 
         result = _apply_patch_to_pc(pc, target, op, value)

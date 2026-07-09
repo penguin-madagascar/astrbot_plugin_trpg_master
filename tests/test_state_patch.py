@@ -75,3 +75,22 @@ def test_apply_state_patches_skips_unknown_or_unsafe_operations():
     assert "not found" in results[1].message
     assert "unsupported op" in results[2].message
     assert "invalid integer" in results[3].message
+
+
+def test_apply_state_patches_delegates_semistrict_ruleset_ops():
+    session = make_session()
+
+    results = apply_state_patches(
+        session,
+        [
+            {"target": "pc:艾莉丝", "op": "damage", "value": 3},
+            {"target": "pc:艾莉丝", "op": "resource_delta", "field": "mp", "value": 2},
+            {"target": "pc:艾莉丝", "op": "skill_delta", "field": "潜行", "value": 5},
+        ],
+    )
+
+    pc = session.players["u1"]
+    assert pc.hp == 7
+    assert pc.ruleset_data["mp"] == 2
+    assert pc.skills["潜行"] == 5
+    assert [result.applied for result in results] == [True, True, True]

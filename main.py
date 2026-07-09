@@ -87,7 +87,7 @@ except ModuleNotFoundError:  # pragma: no cover - local syntax checks outside As
         return decorator
 
 try:
-    from .dice import roll_d20_check, roll_dice
+    from .dice import roll_dice
     from .dice_gif import generate_dice_roll_gif
     from .export import export_session_markdown
     from .gm import call_command_agent, call_gm, parse_structured_patch
@@ -117,6 +117,7 @@ try:
         build_resolution_prompt,
         build_summary_prompt,
     )
+    from .rules import resolve_check_request
     from .state import apply_state_patches
     from .storage import SessionStorage
     from .turn_order import (
@@ -131,7 +132,7 @@ try:
         is_turn_order_active,
     )
 except ImportError:  # pragma: no cover - direct module loading outside package.
-    from dice import roll_d20_check, roll_dice
+    from dice import roll_dice
     from dice_gif import generate_dice_roll_gif
     from export import export_session_markdown
     from gm import call_command_agent, call_gm, parse_structured_patch
@@ -161,6 +162,7 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         build_resolution_prompt,
         build_summary_prompt,
     )
+    from rules import resolve_check_request
     from state import apply_state_patches
     from storage import SessionStorage
     from turn_order import (
@@ -775,12 +777,13 @@ class LLMTRPGPlugin(Star):
                 yield event.plain_result(final)
                 return
 
-            dice_lines = self._execute_dice_requests(
+            dice_lines, dice_state_patches = self._execute_dice_requests(
                 session,
                 parsed.patch["dice_requests"],
             )
+            state_patches = [*dice_state_patches, *parsed.patch["state_patches"]]
             state_results = (
-                apply_state_patches(session, parsed.patch["state_patches"])
+                apply_state_patches(session, state_patches)
                 if bool(self.config.get("allow_state_patch", True))
                 else []
             )
@@ -1280,32 +1283,14 @@ class LLMTRPGPlugin(Star):
         self,
         session: GameSession,
         requests: list[dict[str, Any]],
-    ) -> list[str]:
+    ) -> tuple[list[str], list[dict[str, Any]]]:
         lines: list[str] = []
-        for index, request in enumerate(requests, start=1):
-            actor_name = str(request.get("actor") or "")
-            skill = str(request.get("skill") or "DEX").upper()
-            reason = str(request.get("reason") or "")
-            try:
-                dc = int(request.get("dc", 10))
-            except (TypeError, ValueError):
-                dc = 10
-            pc = session.player_by_character_name(actor_name)
-            attr_value = pc.attributes.get(skill, 10) if pc else 10
-            result = roll_d20_check(attr_value, dc)
-            outcome = _msg(
-                session.language,
-                "success" if result.success else "failure",
-            )
-            natural = f", {result.natural}" if result.natural else ""
-            actor_label = actor_name or f"#{index}"
-            lines.append(
-                f"{actor_label} {skill} vs DC {dc}: "
-                f"d20={result.roll}, mod={result.attribute_modifier}, "
-                f"total={result.total} => {outcome}{natural}"
-                + (f" ({reason})" if reason else "")
-            )
-        return lines
+        state_patches: list[dict[str, Any]] = []
+        for request in requests:
+            result = resolve_check_request(session, request)
+            lines.append(result.message)
+            state_patches.extend(result.state_patches)
+        return lines, state_patches
 
     def _apply_scene_and_memory(
         self,
