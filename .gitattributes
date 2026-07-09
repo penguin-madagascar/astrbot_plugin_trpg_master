@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+.gitignore export-ignore
+.gitattributes export-ignore
+.pytest_cache/ export-ignore
+.venv/ export-ignore
+venv/ export-ignore
+__pycache__/ export-ignore
+tests/__pycache__/ export-ignore
+data/ export-ignore
+exports/ export-ignore
+*.pyc export-ignore
+*.log export-ignore
