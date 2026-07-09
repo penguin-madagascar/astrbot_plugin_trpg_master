@@ -106,6 +106,7 @@ try:
         GameSession,
         PlayerCharacter,
         ScenarioScript,
+        normalize_turn_order_mode,
         utc_now_iso,
     )
     from .prompts import (
@@ -120,7 +121,9 @@ try:
     from .storage import SessionStorage
     from .turn_order import (
         add_player_to_turn_order,
+        apply_turn_controls,
         advance_turn_order,
+        can_submit_action,
         can_finish_turn,
         current_turn_player,
         initialize_turn_order,
@@ -147,6 +150,7 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         GameSession,
         PlayerCharacter,
         ScenarioScript,
+        normalize_turn_order_mode,
         utc_now_iso,
     )
     from prompts import (
@@ -161,7 +165,9 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
     from storage import SessionStorage
     from turn_order import (
         add_player_to_turn_order,
+        apply_turn_controls,
         advance_turn_order,
+        can_submit_action,
         can_finish_turn,
         current_turn_player,
         initialize_turn_order,
@@ -203,7 +209,9 @@ MESSAGES = {
         "turn_none": "暂无建议行动者",
         "turn_advanced": "行动顺序已推进。当前建议行动者：{current}",
         "turn_denied_done": "只有当前行动者可以推进行动顺序。",
+        "turn_denied_action": "当前不是你的行动回合。当前建议行动者：{current}",
         "turn_out_of_order": "行动顺序提示：当前建议行动者是 {current}。",
+        "turn_control_title": "行动顺序",
         "memory_usage": "用法：/trpg_memory 关键词",
         "memory_empty": "没有找到可见的战役记忆。",
         "memory_title": "战役记忆",
@@ -244,7 +252,9 @@ MESSAGES = {
         "turn_none": "No suggested actor",
         "turn_advanced": "Turn order advanced. Current suggested actor: {current}",
         "turn_denied_done": "Only the current actor can advance turn order.",
+        "turn_denied_action": "It is not your turn. Current suggested actor: {current}",
         "turn_out_of_order": "Turn order note: the current suggested actor is {current}.",
+        "turn_control_title": "Turn Order",
         "memory_usage": "Usage: /trpg_memory keyword",
         "memory_empty": "No visible campaign memory found.",
         "memory_title": "Campaign Memory",
@@ -423,9 +433,16 @@ class LLMTRPGPlugin(Star):
             theme=session_theme,
             language=language,
         )
+        turn_enabled = True if script else _config_bool(self.config, "turn_order_enabled", True)
+        turn_mode = (
+            script.turn_order_mode
+            if script
+            else normalize_turn_order_mode(self.config.get("turn_order_mode") or "llm_gm")
+        )
         initialize_turn_order(
             session,
-            enabled=_config_bool(self.config, "turn_order_enabled", True),
+            enabled=turn_enabled,
+            mode=turn_mode,
         )
         if script:
             session.scenario_script = script.to_session_context()
@@ -612,6 +629,15 @@ class LLMTRPGPlugin(Star):
                 yield event.plain_result(self._format_turn_order(session))
                 return
             if action in {"next", "done"}:
+                if session.turn_order.mode == "llm_gm":
+                    request_text = (
+                        "请求结束当前行动。"
+                        if action == "done"
+                        else "请求推进到下一位行动者。"
+                    )
+                    async for item in self.trpg_act(event, request_text):
+                        yield item
+                    return
                 if not can_finish_turn(session, sender_id):
                     yield event.plain_result(_msg(session.language, "turn_denied_done"))
                     return
@@ -702,10 +728,20 @@ class LLMTRPGPlugin(Star):
             sender_id = _sender_id(event)
             actor_pc = session.players.get(sender_id)
             actor = actor_pc.character_name if actor_pc else _sender_name(event)
+            if not can_submit_action(session, sender_id):
+                yield event.plain_result(
+                    _msg(
+                        session.language,
+                        "turn_denied_action",
+                        current=self._turn_current_label(session),
+                    )
+                )
+                return
             turn_warning = self._turn_order_warning(session, sender_id)
-            should_advance_turn = is_turn_order_active(session) and is_current_turn(
-                session,
-                sender_id,
+            should_advance_turn = (
+                session.turn_order.mode == "soft"
+                and is_turn_order_active(session)
+                and is_current_turn(session, sender_id)
             )
             raw_reply = await call_gm(
                 self.context,
@@ -749,10 +785,12 @@ class LLMTRPGPlugin(Star):
                 else []
             )
             apply_knowledge_patches(session, parsed.patch["knowledge_patches"])
+            turn_results = apply_turn_controls(session, parsed.patch["turn_controls"])
             self._apply_scene_and_memory(session, parsed.patch)
 
             dice_summary = "\n".join(dice_lines)
             state_summary = "\n".join(result.message for result in state_results)
+            turn_summary = "\n".join(result.message for result in turn_results)
             resolution = ""
             if bool(self.config.get("second_pass_resolution", True)) and (
                 dice_summary or state_summary
@@ -777,6 +815,7 @@ class LLMTRPGPlugin(Star):
                 parsed.narrative,
                 dice_summary,
                 state_summary,
+                turn_summary,
                 resolution,
             )
             final = self._prepend_turn_warning(turn_warning, final)
@@ -1292,6 +1331,7 @@ class LLMTRPGPlugin(Star):
         narrative: str,
         dice_summary: str,
         state_summary: str,
+        turn_summary: str,
         resolution: str,
     ) -> str:
         parts = [narrative.strip()]
@@ -1299,6 +1339,8 @@ class LLMTRPGPlugin(Star):
             parts.append(f"{_msg(language, 'dice_title')}\n{dice_summary}")
         if state_summary:
             parts.append(f"{_msg(language, 'state_title')}\n{state_summary}")
+        if turn_summary:
+            parts.append(f"{_msg(language, 'turn_control_title')}\n{turn_summary}")
         if resolution:
             parts.append(resolution.strip())
         return "\n\n".join(part for part in parts if part)
@@ -1358,6 +1400,8 @@ class LLMTRPGPlugin(Star):
         )
 
     def _turn_order_warning(self, session: GameSession, user_id: str) -> str:
+        if session.turn_order.mode != "soft":
+            return ""
         if not is_turn_order_active(session) or is_current_turn(session, user_id):
             return ""
         player = current_turn_player(session)
@@ -1387,10 +1431,12 @@ class LLMTRPGPlugin(Star):
         return (
             f"{_msg(session.language, 'turn_title')}: {session.title}\n"
             f"Mode: {order.mode}\n"
+            f"Phase: {order.phase}\n"
             f"Round: {order.round_count}\n"
             f"Paused: {paused}\n"
             f"Current: {self._turn_current_label(session)}\n"
-            f"Queue:\n{queue}"
+            f"Queue:\n{queue}\n"
+            f"Control Note: {order.control_note or '-'}"
         )
 
     def _format_pc(self, language: str, pc: PlayerCharacter) -> str:
@@ -1804,6 +1850,7 @@ def _parse_markdown_scenario(markdown: str) -> ScenarioScript:
         hooks=hooks,
         gm_notes=gm_notes,
         tags=tags,
+        turn_order_mode=_section_text(sections, "turn_order_mode") or "llm_gm",
     )
 
 
@@ -1828,6 +1875,11 @@ def _markdown_section_key(value: str) -> str:
         "language": "language",
         "标签": "tags",
         "tags": "tags",
+        "行动顺序": "turn_order_mode",
+        "行动顺序模式": "turn_order_mode",
+        "turn_order_mode": "turn_order_mode",
+        "turn order": "turn_order_mode",
+        "turn mode": "turn_order_mode",
         "gm 备注": "gm_notes",
         "gm备注": "gm_notes",
         "gm notes": "gm_notes",

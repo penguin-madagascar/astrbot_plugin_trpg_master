@@ -31,6 +31,7 @@ const els = {
 const scriptFields = {
   title: document.getElementById("script-title"),
   language: document.getElementById("script-language"),
+  turn_order_mode: document.getElementById("script-turn-order-mode"),
   theme: document.getElementById("script-theme"),
   summary: document.getElementById("script-summary"),
   background: document.getElementById("script-background"),
@@ -154,10 +155,14 @@ function renderScripts() {
     const title = document.createElement("strong");
     title.textContent = script.title || "未命名剧本";
     const meta = document.createElement("span");
-    meta.textContent = `${script.language || "zh"} · ${script.theme || script.title || ""}`;
+    meta.textContent = `${script.language || "zh"} · ${turnOrderModeLabel(script.turn_order_mode)} · ${script.theme || script.title || ""}`;
     button.append(title, meta);
     els.scripts.append(button);
   });
+}
+
+function turnOrderModeLabel(mode) {
+  return mode === "soft" ? "玩家软顺序" : "LLM 主持";
 }
 
 function renderKnowledge() {
@@ -212,6 +217,7 @@ function selectScript(scriptId) {
   state.currentScriptId = script.script_id;
   scriptFields.title.value = script.title || "";
   scriptFields.language.value = script.language || "zh";
+  scriptFields.turn_order_mode.value = script.turn_order_mode || "llm_gm";
   scriptFields.theme.value = script.theme || "";
   scriptFields.summary.value = script.summary || "";
   scriptFields.background.value = script.background || "";
@@ -229,6 +235,7 @@ function startNewScript() {
     field.value = "";
   });
   scriptFields.language.value = "zh";
+  scriptFields.turn_order_mode.value = "llm_gm";
   els.deleteScript.disabled = true;
   renderScripts();
 }
@@ -237,6 +244,7 @@ function collectScriptPayload() {
   const payload = {
     title: scriptFields.title.value.trim(),
     language: scriptFields.language.value,
+    turn_order_mode: scriptFields.turn_order_mode.value,
     theme: scriptFields.theme.value.trim(),
     summary: scriptFields.summary.value.trim(),
     background: scriptFields.background.value.trim(),

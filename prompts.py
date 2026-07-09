@@ -79,6 +79,15 @@ PATCH_SCHEMA = {
             "importance": 4,
         },
     ],
+    "turn_controls": [
+        {
+            "op": "advance",
+            "actor": "角色名",
+            "actors": ["角色名"],
+            "phase": "turn_order",
+            "reason": "行动顺序控制说明",
+        }
+    ],
     "new_plot_threads": [],
     "memory_notes": [],
 }
@@ -149,6 +158,9 @@ def build_action_prompt(session: GameSession, actor: str, action: str) -> str:
         "不要写死骰子结果。不要直接修改角色状态，只能提出 state_patches。\n"
         "请用 knowledge_patches 维护长期战役知识库：人物、地点、线索、秘密、时间线、承诺、伏笔和未解决冲突。"
         "visibility 可用 public/private/gm_only；不得通过玩家可见叙事泄露 gm_only 内容。\n"
+        "如果 turn_order.mode 是 llm_gm，请用 turn_controls 主持行动顺序；可用 op 包括 "
+        "set_phase、set_queue、set_current、advance、pause、resume、control_note。"
+        "不要直接改写 turn_order，系统会校验角色名和队列。\n"
         "当前 session 快照：\n"
         f"{snapshot}\n\n"
         "相关战役记忆：\n"
@@ -258,8 +270,10 @@ def _turn_order_snapshot(session: GameSession) -> dict[str, Any]:
     return {
         "enabled": order.enabled,
         "mode": order.mode,
+        "phase": order.phase,
         "round_count": order.round_count,
         "paused": order.paused,
+        "control_note": order.control_note,
         "current": current,
         "queue": queue,
     }

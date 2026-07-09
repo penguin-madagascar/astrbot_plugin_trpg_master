@@ -15,6 +15,9 @@ DEFAULT_ATTRIBUTES = {
     "CHA": 10,
 }
 
+TURN_ORDER_MODES = {"soft", "llm_gm"}
+TURN_ORDER_PHASES = {"free", "turn_order", "paused"}
+
 
 def _normalized_attributes(values: dict[str, Any] | None) -> dict[str, int]:
     attrs = dict(DEFAULT_ATTRIBUTES)
@@ -28,6 +31,20 @@ def _normalized_skills(values: dict[str, Any] | None) -> dict[str, int]:
 
 def _string_list(values: list[Any] | None) -> list[str]:
     return [str(item) for item in (values or [])]
+
+
+def normalize_turn_order_mode(value: Any, default: str = "llm_gm") -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in TURN_ORDER_MODES:
+        return normalized
+    return default if default in TURN_ORDER_MODES else "llm_gm"
+
+
+def normalize_turn_order_phase(value: Any, mode: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in TURN_ORDER_PHASES:
+        return normalized
+    return "turn_order" if mode == "soft" else "free"
 
 
 def _knowledge_importance(value: Any, default: int = 3) -> int:
@@ -134,18 +151,26 @@ class CharacterPreset:
 class TurnOrderState:
     enabled: bool = False
     mode: str = "soft"
+    phase: str = ""
     queue: list[str] = field(default_factory=list)
     current_index: int = 0
     round_count: int = 1
     paused: bool = False
+    control_note: str = ""
 
     def __post_init__(self) -> None:
         self.enabled = bool(self.enabled)
-        self.mode = "soft"
+        self.mode = normalize_turn_order_mode(self.mode, default="llm_gm")
+        self.phase = normalize_turn_order_phase(self.phase, self.mode)
         self.queue = _string_list(self.queue)
         self.current_index = max(0, int(self.current_index or 0))
         self.round_count = max(1, int(self.round_count or 1))
         self.paused = bool(self.paused)
+        if self.phase == "paused":
+            self.paused = True
+        elif self.paused:
+            self.phase = "paused"
+        self.control_note = str(self.control_note or "").strip()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "TurnOrderState":
@@ -153,10 +178,12 @@ class TurnOrderState:
         return cls(
             enabled=bool(payload.get("enabled", False)),
             mode=str(payload.get("mode") or "soft"),
+            phase=str(payload.get("phase") or ""),
             queue=payload.get("queue") or [],
             current_index=int(payload.get("current_index", 0) or 0),
             round_count=int(payload.get("round_count", 1) or 1),
             paused=bool(payload.get("paused", False)),
+            control_note=str(payload.get("control_note") or ""),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -175,6 +202,7 @@ class ScenarioScript:
     hooks: list[str] = field(default_factory=list)
     gm_notes: str = ""
     tags: list[str] = field(default_factory=list)
+    turn_order_mode: str = "llm_gm"
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
 
@@ -189,6 +217,7 @@ class ScenarioScript:
         self.hooks = _string_list(self.hooks)
         self.gm_notes = str(self.gm_notes or "").strip()
         self.tags = _string_list(self.tags)
+        self.turn_order_mode = normalize_turn_order_mode(self.turn_order_mode)
         self.created_at = str(self.created_at or utc_now_iso())
         self.updated_at = str(self.updated_at or self.created_at or utc_now_iso())
 
@@ -208,6 +237,7 @@ class ScenarioScript:
             hooks=payload.get("hooks") or [],
             gm_notes=str(payload.get("gm_notes") or ""),
             tags=payload.get("tags") or [],
+            turn_order_mode=str(payload.get("turn_order_mode") or "llm_gm"),
             created_at=created_at,
             updated_at=str(payload.get("updated_at") or created_at),
         )
@@ -225,6 +255,7 @@ class ScenarioScript:
             "hooks": list(self.hooks),
             "gm_notes": self.gm_notes,
             "tags": list(self.tags),
+            "turn_order_mode": self.turn_order_mode,
         }
 
 

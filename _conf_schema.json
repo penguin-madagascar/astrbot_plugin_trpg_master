@@ -64,5 +64,11 @@
     "description": "启用多人行动顺序",
     "hint": "新跑团启动时创建软队列；玩家加入后自动入队。",
     "default": true
+  },
+  "turn_order_mode": {
+    "type": "string",
+    "description": "自由主题行动顺序模式",
+    "hint": "仅在 /trpg_start 未匹配剧本时作为兜底；剧本内设置会覆盖该值。可用值：llm_gm、soft。",
+    "default": "llm_gm"
   }
 }

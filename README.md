@@ -10,6 +10,7 @@
 
 - 通过 `/trpg_start` 启动中文、英文、日文或韩文跑团。
 - 支持玩家加入、角色预设、角色卡查看、行动顺序、状态查看和战役回顾。
+- 行动顺序支持两种模式：剧本级 `llm_gm`（LLM 主持人强控制）和 `soft`（玩家软顺序）。
 - 支持基础骰子表达式和 GIF 掷骰结果，依赖 `Pillow`。
 - 支持 GM 返回结构化 JSON，由插件执行骰子请求、应用白名单状态变更并记录日志。
 - 支持战役知识库、线索、剧情线、实体、事实和关系记录。
@@ -59,6 +60,7 @@ Pillow>=10.0.0
 | `strict_json_patch` | `true` | 是否只解析 fenced JSON。 |
 | `command_agent_enabled` | `true` | 跑团中是否把自然语言转换为 `/trpg_*` 命令。 |
 | `turn_order_enabled` | `true` | 新跑团是否启用多人行动顺序。 |
+| `turn_order_mode` | `llm_gm` | 自由主题跑团的行动顺序兜底模式；匹配剧本时以剧本内设置为准。可用值：`llm_gm`、`soft`。 |
 
 ## 指令
 
@@ -85,12 +87,20 @@ Pillow>=10.0.0
 
 如果 `command_agent_enabled` 开启，跑团进行中玩家也可以直接发送自然语言，插件会尝试转换为当前阶段允许的 `/trpg_*` 命令。普通非 TRPG 斜杠命令不会被本插件拦截。
 
+## 行动顺序模式
+
+每个剧本可以单独设置行动顺序模式，使用 `/trpg_start 剧本名` 启动时会覆盖全局配置；只有自由主题跑团才使用 `turn_order_mode` 全局兜底。
+
+- `llm_gm`：LLM 作为当前团主持人，通过 GM JSON 中的 `turn_controls` 提出设置队列、切换当前行动者、推进、暂停或恢复等控制意图，插件校验后应用。玩家的 `/trpg_turn done|next` 会作为请求交给 LLM 裁定，不会直接改队列。
+- `soft`：玩家软顺序。当前行动者可以用 `/trpg_turn done|next` 直接推进；当前行动者提交 `/trpg_act` 后也会自动推进到下一位。非当前行动者直接行动时会收到顺序提示，但仍可执行。
+
 ## WebGUI
 
 插件会注册 AstrBot 插件页面，用于：
 
 - 编辑和删除剧本。
-- 导入 Markdown 或 JSON 剧本。
+- 为每个剧本选择行动顺序模式。
+- 导入 Markdown 或 JSON 剧本；Markdown 可用 `## 行动顺序`、`## turn_order_mode` 或 `## turn order` 指定 `llm_gm`/`soft`。
 - 导出剧本 JSON。
 - 查看战役知识库。
 - 调整 `_conf_schema.json` 中声明的插件配置。

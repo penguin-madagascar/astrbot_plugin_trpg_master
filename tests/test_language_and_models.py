@@ -112,6 +112,7 @@ def test_scenario_script_serialization_restores_defaults_and_context():
     assert script.hooks == ["钟楼停摆", "旧井低语"]
     assert script.gm_notes == ""
     assert script.tags == ["民俗", "调查"]
+    assert script.turn_order_mode == "llm_gm"
     assert script.created_at
     assert script.updated_at
 
@@ -127,7 +128,30 @@ def test_scenario_script_serialization_restores_defaults_and_context():
         "hooks": ["钟楼停摆", "旧井低语"],
         "gm_notes": "",
         "tags": ["民俗", "调查"],
+        "turn_order_mode": "llm_gm",
     }
+
+
+def test_scenario_script_preserves_valid_turn_order_mode_and_normalizes_invalid():
+    soft_script = ScenarioScript.from_dict(
+        {
+            "script_id": "fog-town",
+            "title": "雾镇",
+            "turn_order_mode": "soft",
+        }
+    )
+    invalid_script = ScenarioScript.from_dict(
+        {
+            "script_id": "bad-town",
+            "title": "坏镇",
+            "turn_order_mode": "unknown",
+        }
+    )
+
+    assert soft_script.turn_order_mode == "soft"
+    assert soft_script.to_dict()["turn_order_mode"] == "soft"
+    assert soft_script.to_session_context()["turn_order_mode"] == "soft"
+    assert invalid_script.turn_order_mode == "llm_gm"
 
 
 def test_game_session_serialization_preserves_scenario_script_context():

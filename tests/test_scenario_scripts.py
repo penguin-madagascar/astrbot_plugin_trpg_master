@@ -25,6 +25,7 @@ def test_parse_scenario_json_import_accepts_single_script():
             "hooks": ["钟楼停摆", "旧井低语"],
             "gm_notes": "慢节奏调查。",
             "tags": ["民俗", "调查"],
+            "turn_order_mode": "soft",
         },
         ensure_ascii=False,
     )
@@ -43,6 +44,7 @@ def test_parse_scenario_json_import_accepts_single_script():
             hooks=["钟楼停摆", "旧井低语"],
             gm_notes="慢节奏调查。",
             tags=["民俗", "调查"],
+            turn_order_mode="soft",
             created_at=scripts[0].created_at,
             updated_at=scripts[0].updated_at,
         )
@@ -68,6 +70,9 @@ def test_parse_scenario_markdown_import_uses_expected_sections():
 
 ## GM 备注
 慢节奏调查。
+
+## 行动顺序
+soft
 """.strip()
 
     scripts = _parse_scenario_import(markdown, filename="fog.md")
@@ -80,6 +85,20 @@ def test_parse_scenario_markdown_import_uses_expected_sections():
     assert script.opening_scene == "玩家在祠堂醒来。"
     assert script.hooks == ["钟楼停摆", "旧井低语"]
     assert script.gm_notes == "慢节奏调查。"
+    assert script.turn_order_mode == "soft"
+
+
+def test_parse_scenario_markdown_invalid_turn_order_mode_uses_default():
+    markdown = """
+# 雾镇
+
+## turn_order_mode
+invalid
+""".strip()
+
+    script = _parse_scenario_import(markdown, filename="fog.md")[0]
+
+    assert script.turn_order_mode == "llm_gm"
 
 
 def test_coerce_config_updates_accepts_schema_keys_and_basic_types():
@@ -123,6 +142,18 @@ def test_plugin_registers_dashboard_web_api_routes():
     assert f"/{PLUGIN_NAME}/scripts/export" in routes
 
 
+def test_dashboard_exposes_script_turn_order_mode_field():
+    html = Path("pages/dashboard/index.html").read_text(encoding="utf-8")
+    js = Path("pages/dashboard/app.js").read_text(encoding="utf-8")
+
+    assert 'id="script-turn-order-mode"' in html
+    assert 'value="llm_gm"' in html
+    assert 'value="soft"' in html
+    assert "turn_order_mode: document.getElementById(\"script-turn-order-mode\")" in js
+    assert "turn_order_mode: scriptFields.turn_order_mode.value" in js
+    assert "turnOrderModeLabel(script.turn_order_mode)" in js
+
+
 def test_trpg_start_uses_matching_scenario_script(monkeypatch):
     captured = {}
 
@@ -141,9 +172,13 @@ def test_trpg_start_uses_matching_scenario_script(monkeypatch):
         opening_scene="玩家在祠堂醒来。",
         hooks=["钟楼停摆", "旧井低语"],
         gm_notes="慢节奏调查。",
+        turn_order_mode="soft",
     )
     storage = FakeStorage({"fog-town": script})
-    plugin = LLMTRPGPlugin(context=object())
+    plugin = LLMTRPGPlugin(
+        context=object(),
+        config={"turn_order_enabled": False, "turn_order_mode": "llm_gm"},
+    )
     plugin.storage = storage
 
     outputs = asyncio.run(_collect(plugin.trpg_start(FakeEvent(), "雾镇")))
@@ -152,7 +187,10 @@ def test_trpg_start_uses_matching_scenario_script(monkeypatch):
     assert storage.session.title == "雾镇"
     assert storage.session.theme == "民俗恐怖"
     assert storage.session.language == "zh"
+    assert storage.session.turn_order.enabled is True
+    assert storage.session.turn_order.mode == "soft"
     assert storage.session.scenario_script["script_id"] == "fog-town"
+    assert storage.session.scenario_script["turn_order_mode"] == "soft"
     assert "被浓雾封锁的小镇。" in captured["prompt"]
     assert "十年前的火灾仍无人提起。" in captured["prompt"]
     assert "玩家在祠堂醒来。" in captured["prompt"]
@@ -170,7 +208,10 @@ def test_trpg_start_keeps_free_theme_when_no_scenario_matches(monkeypatch):
     monkeypatch.setattr(main, "call_gm", fake_call_gm)
     script = ScenarioScript(script_id="fog-town", title="雾镇")
     storage = FakeStorage({"fog-town": script})
-    plugin = LLMTRPGPlugin(context=object())
+    plugin = LLMTRPGPlugin(
+        context=object(),
+        config={"turn_order_enabled": True, "turn_order_mode": "soft"},
+    )
     plugin.storage = storage
 
     outputs = asyncio.run(_collect(plugin.trpg_start(FakeEvent(), "海上奇遇")))
@@ -178,6 +219,8 @@ def test_trpg_start_keeps_free_theme_when_no_scenario_matches(monkeypatch):
     assert outputs == ["自由开场。"]
     assert storage.session.title == "海上奇遇"
     assert storage.session.theme == "海上奇遇"
+    assert storage.session.turn_order.enabled is True
+    assert storage.session.turn_order.mode == "soft"
     assert storage.session.scenario_script is None
     assert "主题：海上奇遇" in captured["prompt"]
     assert "被浓雾封锁的小镇" not in captured["prompt"]

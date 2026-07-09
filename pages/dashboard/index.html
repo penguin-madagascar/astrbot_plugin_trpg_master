@@ -55,7 +55,7 @@
                 </div>
               </div>
 
-              <div class="grid two">
+              <div class="grid three">
                 <label class="field" for="script-title">
                   <span>标题</span>
                   <input id="script-title" name="title" required />
@@ -67,6 +67,13 @@
                     <option value="en">English</option>
                     <option value="ja">日本語</option>
                     <option value="ko">한국어</option>
+                  </select>
+                </label>
+                <label class="field" for="script-turn-order-mode">
+                  <span>行动顺序模式</span>
+                  <select id="script-turn-order-mode" name="turn_order_mode">
+                    <option value="llm_gm">LLM 主持人强控制</option>
+                    <option value="soft">玩家软顺序</option>
                   </select>
                 </label>
               </div>
