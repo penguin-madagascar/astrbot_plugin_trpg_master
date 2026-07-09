@@ -19,6 +19,16 @@ DEFAULT_RULESET_ID = "d20_lite"
 SUPPORTED_RULESET_IDS = {"d20_lite", "coc7_lite"}
 TURN_ORDER_MODES = {"soft", "llm_gm"}
 TURN_ORDER_PHASES = {"free", "turn_order", "paused"}
+PLAY_MODES = {"simple", "advanced", "custom"}
+FEATURE_FLAG_KEYS = (
+    "command_agent_enabled",
+    "turn_order_enabled",
+    "structured_patch_enabled",
+    "dice_requests_enabled",
+    "state_patch_enabled",
+    "knowledge_enabled",
+    "second_pass_resolution_enabled",
+)
 
 
 def _normalized_attributes(values: dict[str, Any] | None) -> dict[str, int]:
@@ -33,6 +43,19 @@ def _normalized_skills(values: dict[str, Any] | None) -> dict[str, int]:
 
 def _string_list(values: list[Any] | None) -> list[str]:
     return [str(item) for item in (values or [])]
+
+
+def _coerce_bool(value: Any, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value or "").strip().lower()
+    if normalized in {"true", "1", "yes", "y", "on", "enabled"}:
+        return True
+    if normalized in {"false", "0", "no", "n", "off", "disabled"}:
+        return False
+    return default
 
 
 def normalize_ruleset_id(value: Any, default: str = DEFAULT_RULESET_ID) -> str:
@@ -54,6 +77,47 @@ def normalize_turn_order_phase(value: Any, mode: str) -> str:
     if normalized in TURN_ORDER_PHASES:
         return normalized
     return "turn_order" if mode == "soft" else "free"
+
+
+def normalize_play_mode(value: Any, default: str = "advanced") -> str:
+    aliases = {
+        "simple": "simple",
+        "easy": "simple",
+        "简易": "simple",
+        "简单": "simple",
+        "advanced": "advanced",
+        "advance": "advanced",
+        "进阶": "advanced",
+        "高级": "advanced",
+        "custom": "custom",
+        "自定义": "custom",
+    }
+    normalized = str(value or "").strip().lower()
+    if normalized in aliases:
+        return aliases[normalized]
+    if default == "":
+        return ""
+    return default if default in PLAY_MODES else "advanced"
+
+
+def default_feature_flags(play_mode: str = "advanced") -> dict[str, bool]:
+    mode = normalize_play_mode(play_mode)
+    enabled = mode != "simple"
+    return {key: enabled for key in FEATURE_FLAG_KEYS}
+
+
+def normalize_feature_flags(
+    values: dict[str, Any] | None,
+    *,
+    play_mode: str = "advanced",
+) -> dict[str, bool]:
+    mode = normalize_play_mode(play_mode)
+    flags = default_feature_flags("advanced" if mode == "custom" else mode)
+    if mode == "custom" and isinstance(values, dict):
+        for key in FEATURE_FLAG_KEYS:
+            if key in values:
+                flags[key] = _coerce_bool(values[key], flags[key])
+    return flags
 
 
 def _knowledge_importance(value: Any, default: int = 3) -> int:
@@ -259,6 +323,7 @@ class ScenarioScript:
     script_id: str
     title: str
     language: str = "zh"
+    play_mode: str = "advanced"
     theme: str = ""
     summary: str = ""
     background: str = ""
@@ -269,6 +334,7 @@ class ScenarioScript:
     turn_order_mode: str = "llm_gm"
     ruleset_id: str = DEFAULT_RULESET_ID
     rule_nodes: list[RuleNode] = field(default_factory=list)
+    feature_flags: dict[str, bool] = field(default_factory=default_feature_flags)
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
 
@@ -276,6 +342,7 @@ class ScenarioScript:
         self.title = str(self.title).strip()
         self.script_id = str(self.script_id or _new_script_id()).strip()
         self.language = str(self.language or "zh").strip() or "zh"
+        self.play_mode = normalize_play_mode(self.play_mode, default="advanced")
         self.theme = str(self.theme or self.title).strip()
         self.summary = str(self.summary or "").strip()
         self.background = str(self.background or "").strip()
@@ -290,6 +357,10 @@ class ScenarioScript:
             for item in (self.rule_nodes or [])
             if isinstance(item, (RuleNode, dict))
         ]
+        self.feature_flags = normalize_feature_flags(
+            self.feature_flags,
+            play_mode=self.play_mode,
+        )
         self.created_at = str(self.created_at or utc_now_iso())
         self.updated_at = str(self.updated_at or self.created_at or utc_now_iso())
 
@@ -302,6 +373,7 @@ class ScenarioScript:
             script_id=str(payload.get("script_id") or payload.get("id") or _new_script_id()),
             title=title,
             language=str(payload.get("language") or "zh"),
+            play_mode=str(payload.get("play_mode") or "advanced"),
             theme=str(payload.get("theme") or title),
             summary=str(payload.get("summary") or ""),
             background=str(payload.get("background") or ""),
@@ -312,6 +384,7 @@ class ScenarioScript:
             turn_order_mode=str(payload.get("turn_order_mode") or "llm_gm"),
             ruleset_id=str(payload.get("ruleset_id") or DEFAULT_RULESET_ID),
             rule_nodes=payload.get("rule_nodes") or [],
+            feature_flags=payload.get("feature_flags") or {},
             created_at=created_at,
             updated_at=str(payload.get("updated_at") or created_at),
         )
@@ -323,6 +396,7 @@ class ScenarioScript:
         return {
             "script_id": self.script_id,
             "title": self.title,
+            "play_mode": self.play_mode,
             "summary": self.summary,
             "background": self.background,
             "opening_scene": self.opening_scene,
@@ -332,6 +406,7 @@ class ScenarioScript:
             "turn_order_mode": self.turn_order_mode,
             "ruleset_id": self.ruleset_id,
             "rule_nodes": [node.to_dict() for node in self.rule_nodes],
+            "feature_flags": dict(self.feature_flags),
         }
 
 
@@ -775,6 +850,8 @@ class GameSession:
     theme: str
     language: str
     ruleset_id: str = DEFAULT_RULESET_ID
+    play_mode: str = "advanced"
+    feature_flags: dict[str, bool] = field(default_factory=default_feature_flags)
     status: str = "running"
     turn_count: int = 0
     players: dict[str, PlayerCharacter] = field(default_factory=dict)
@@ -798,13 +875,21 @@ class GameSession:
         theme: str,
         language: str,
         ruleset_id: str = DEFAULT_RULESET_ID,
+        play_mode: str = "advanced",
+        feature_flags: dict[str, Any] | None = None,
     ) -> "GameSession":
+        normalized_mode = normalize_play_mode(play_mode, default="advanced")
         return cls(
             session_id=session_id,
             title=title,
             theme=theme,
             language=language or "zh",
             ruleset_id=normalize_ruleset_id(ruleset_id),
+            play_mode=normalized_mode,
+            feature_flags=normalize_feature_flags(
+                feature_flags,
+                play_mode=normalized_mode,
+            ),
             scene={"location": "", "description": ""},
         )
 
@@ -813,6 +898,14 @@ class GameSession:
         payload = dict(data)
         payload["language"] = str(payload.get("language") or "zh")
         payload["ruleset_id"] = normalize_ruleset_id(payload.get("ruleset_id"))
+        payload["play_mode"] = normalize_play_mode(
+            payload.get("play_mode"),
+            default="advanced",
+        )
+        payload["feature_flags"] = normalize_feature_flags(
+            payload.get("feature_flags") or {},
+            play_mode=payload["play_mode"],
+        )
         payload["players"] = {
             str(user_id): PlayerCharacter.from_dict(player)
             for user_id, player in payload.get("players", {}).items()
@@ -841,6 +934,8 @@ class GameSession:
             "theme": self.theme,
             "language": self.language,
             "ruleset_id": self.ruleset_id,
+            "play_mode": self.play_mode,
+            "feature_flags": dict(self.feature_flags),
             "status": self.status,
             "turn_count": self.turn_count,
             "players": {

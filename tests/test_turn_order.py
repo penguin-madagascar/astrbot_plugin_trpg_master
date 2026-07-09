@@ -161,7 +161,7 @@ def test_trpg_start_initializes_turn_order_without_player_gm(monkeypatch):
     plugin.storage = FakeStorage()
     event = FakeEvent(user_id="gm", sender_name="Keeper")
 
-    outputs = asyncio.run(_collect(plugin.trpg_start(event, "雾镇")))
+    outputs = asyncio.run(_collect(plugin.trpg_start(event, "进阶 雾镇")))
 
     assert outputs == ["开场。"]
     assert plugin.storage.session.turn_order.enabled is True

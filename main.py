@@ -106,12 +106,16 @@ try:
         GameSession,
         PlayerCharacter,
         ScenarioScript,
+        default_feature_flags,
+        normalize_feature_flags,
+        normalize_play_mode,
         normalize_ruleset_id,
         normalize_turn_order_mode,
         utc_now_iso,
     )
     from .prompts import (
         DEFAULT_GM_SYSTEM_PROMPT,
+        SIMPLE_GM_SYSTEM_PROMPT,
         build_action_prompt,
         build_command_agent_prompt,
         build_opening_prompt,
@@ -152,12 +156,16 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         GameSession,
         PlayerCharacter,
         ScenarioScript,
+        default_feature_flags,
+        normalize_feature_flags,
+        normalize_play_mode,
         normalize_ruleset_id,
         normalize_turn_order_mode,
         utc_now_iso,
     )
     from prompts import (
         DEFAULT_GM_SYSTEM_PROMPT,
+        SIMPLE_GM_SYSTEM_PROMPT,
         build_action_prompt,
         build_command_agent_prompt,
         build_opening_prompt,
@@ -357,7 +365,10 @@ class LLMTRPGPlugin(Star):
             return
         sender_id = _sender_id(event)
         is_direct_trpg_command = stripped.lower().startswith("/trpg_")
-        command_agent_enabled = _config_bool(self.config, "command_agent_enabled", True)
+        command_agent_enabled = self._session_feature_enabled(
+            session,
+            "command_agent_enabled",
+        )
         if (
             not is_direct_trpg_command
             and not command_agent_enabled
@@ -424,14 +435,21 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_start", desc="启动新的 LLM TRPG 跑团。")
     async def trpg_start(self, event: AstrMessageEvent, theme: GreedyStr = ""):
         raw_theme = str(theme or "").strip()
+        requested_mode, script_query = _split_start_mode(raw_theme)
         default_theme = str(self.config.get("default_theme") or "奇幻冒险")
-        script = await self.storage.find_scenario_script(raw_theme) if raw_theme else None
-        session_title = script.title if script else (raw_theme or default_theme)
+        script = (
+            await self.storage.find_scenario_script(script_query)
+            if script_query
+            else None
+        )
+        play_mode = requested_mode or (script.play_mode if script else "simple")
+        feature_flags = self._start_feature_flags(play_mode, script)
+        session_title = script.title if script else (script_query or default_theme)
         session_theme = script.theme if script else session_title
         language = (
             script.language
             if script
-            else detect_language_from_theme(raw_theme) if raw_theme else "zh"
+            else detect_language_from_theme(script_query) if script_query else "zh"
         )
         ruleset_id = (
             script.ruleset_id
@@ -444,8 +462,10 @@ class LLMTRPGPlugin(Star):
             theme=session_theme,
             language=language,
             ruleset_id=ruleset_id,
+            play_mode=play_mode,
+            feature_flags=feature_flags,
         )
-        turn_enabled = True if script else _config_bool(self.config, "turn_order_enabled", True)
+        turn_enabled = bool(feature_flags.get("turn_order_enabled", True))
         turn_mode = (
             script.turn_order_mode
             if script
@@ -458,17 +478,20 @@ class LLMTRPGPlugin(Star):
         )
         if script:
             session.scenario_script = script.to_session_context()
+            session.scenario_script["play_mode"] = play_mode
+            session.scenario_script["feature_flags"] = dict(feature_flags)
             session.history_summary = _scenario_history_summary(script)
             session.scene["description"] = script.opening_scene
             session.plot_threads.extend(script.hooks)
-            _initialize_scenario_knowledge(session, script)
+            if feature_flags.get("knowledge_enabled", True):
+                _initialize_scenario_knowledge(session, script)
 
         try:
             opening = await call_gm(
                 self.context,
                 event,
                 prompt=build_opening_prompt(session),
-                system_prompt=self._gm_system_prompt(),
+                system_prompt=self._gm_system_prompt(session),
             )
         except Exception:
             logger.exception("TRPG opening generation failed")
@@ -771,8 +794,16 @@ class LLMTRPGPlugin(Star):
                 self.context,
                 event,
                 prompt=build_action_prompt(session, actor, raw_action),
-                system_prompt=self._gm_system_prompt(),
+                system_prompt=self._gm_system_prompt(session),
             )
+
+            if not self._session_feature_enabled(session, "structured_patch_enabled"):
+                final = self._prepend_turn_warning(turn_warning, raw_reply.strip())
+                self._finish_turn(session, event, raw_action, final)
+                await self._trim_recent_events(session, event)
+                await self.storage.save_session(session)
+                yield event.plain_result(final)
+                return
 
             try:
                 parsed = parse_structured_patch(
@@ -785,12 +816,13 @@ class LLMTRPGPlugin(Star):
                     part for part in (raw_reply.strip(), _msg(session.language, "json_failed")) if part
                 )
                 final = self._prepend_turn_warning(turn_warning, final)
-                record_turn_timeline_event(
-                    session,
-                    actor=actor,
-                    action=raw_action,
-                    outcome=final,
-                )
+                if self._session_feature_enabled(session, "knowledge_enabled"):
+                    record_turn_timeline_event(
+                        session,
+                        actor=actor,
+                        action=raw_action,
+                        outcome=final,
+                    )
                 self._finish_turn(session, event, raw_action, final)
                 if should_advance_turn:
                     advance_turn_order(session)
@@ -799,25 +831,37 @@ class LLMTRPGPlugin(Star):
                 yield event.plain_result(final)
                 return
 
-            dice_lines, dice_state_patches = self._execute_dice_requests(
-                session,
-                parsed.patch["dice_requests"],
-            )
+            if self._session_feature_enabled(session, "dice_requests_enabled"):
+                dice_lines, dice_state_patches = self._execute_dice_requests(
+                    session,
+                    parsed.patch["dice_requests"],
+                )
+            else:
+                dice_lines, dice_state_patches = [], []
             state_patches = [*dice_state_patches, *parsed.patch["state_patches"]]
             state_results = (
                 apply_state_patches(session, state_patches)
-                if bool(self.config.get("allow_state_patch", True))
+                if self._session_feature_enabled(session, "state_patch_enabled")
                 else []
             )
-            apply_knowledge_patches(session, parsed.patch["knowledge_patches"])
-            turn_results = apply_turn_controls(session, parsed.patch["turn_controls"])
-            self._apply_scene_and_memory(session, parsed.patch)
+            if self._session_feature_enabled(session, "knowledge_enabled"):
+                apply_knowledge_patches(session, parsed.patch["knowledge_patches"])
+            turn_results = (
+                apply_turn_controls(session, parsed.patch["turn_controls"])
+                if self._session_feature_enabled(session, "turn_order_enabled")
+                else []
+            )
+            self._apply_scene_and_memory(
+                session,
+                parsed.patch,
+                include_memory=self._session_feature_enabled(session, "knowledge_enabled"),
+            )
 
             dice_summary = "\n".join(dice_lines)
             state_summary = "\n".join(result.message for result in state_results)
             turn_summary = "\n".join(result.message for result in turn_results)
             resolution = ""
-            if bool(self.config.get("second_pass_resolution", True)) and (
+            if self._session_feature_enabled(session, "second_pass_resolution_enabled") and (
                 dice_summary or state_summary
             ):
                 try:
@@ -830,7 +874,7 @@ class LLMTRPGPlugin(Star):
                             dice_summary,
                             state_summary,
                         ),
-                        system_prompt=self._gm_system_prompt(),
+                        system_prompt=self._gm_system_prompt(session),
                     )
                 except Exception:
                     logger.warning("TRPG second pass resolution failed")
@@ -844,12 +888,13 @@ class LLMTRPGPlugin(Star):
                 resolution,
             )
             final = self._prepend_turn_warning(turn_warning, final)
-            record_turn_timeline_event(
-                session,
-                actor=actor,
-                action=raw_action,
-                outcome=final,
-            )
+            if self._session_feature_enabled(session, "knowledge_enabled"):
+                record_turn_timeline_event(
+                    session,
+                    actor=actor,
+                    action=raw_action,
+                    outcome=final,
+                )
             self._finish_turn(session, event, raw_action, final)
             if should_advance_turn:
                 advance_turn_order(session)
@@ -946,6 +991,14 @@ class LLMTRPGPlugin(Star):
             return None
         if not session.language:
             session.language = str(self.config.get("response_language") or "zh")
+        session.play_mode = normalize_play_mode(
+            getattr(session, "play_mode", "advanced"),
+            default="advanced",
+        )
+        session.feature_flags = normalize_feature_flags(
+            getattr(session, "feature_flags", {}) or {},
+            play_mode=session.play_mode,
+        )
         return session
 
     async def _command_language(self, event: AstrMessageEvent) -> str:
@@ -953,6 +1006,59 @@ class LLMTRPGPlugin(Star):
         if session and session.status == "running":
             return session.language or "zh"
         return "zh"
+
+    def _start_feature_flags(
+        self,
+        play_mode: str,
+        script: ScenarioScript | None,
+    ) -> dict[str, bool]:
+        normalized_mode = normalize_play_mode(play_mode, default="advanced")
+        source_flags = script.feature_flags if script and normalized_mode == "custom" else {}
+        flags = normalize_feature_flags(source_flags, play_mode=normalized_mode)
+        if normalized_mode == "advanced":
+            flags["command_agent_enabled"] = _config_bool(
+                self.config,
+                "command_agent_enabled",
+                True,
+            )
+            flags["turn_order_enabled"] = (
+                True if script else _config_bool(self.config, "turn_order_enabled", True)
+            )
+            flags["state_patch_enabled"] = _config_bool(
+                self.config,
+                "allow_state_patch",
+                True,
+            )
+            flags["second_pass_resolution_enabled"] = _config_bool(
+                self.config,
+                "second_pass_resolution",
+                True,
+            )
+        return flags
+
+    def _session_feature_enabled(
+        self,
+        session: GameSession,
+        key: str,
+    ) -> bool:
+        mode = normalize_play_mode(
+            getattr(session, "play_mode", "advanced"),
+            default="advanced",
+        )
+        flags = normalize_feature_flags(
+            getattr(session, "feature_flags", {}) or {},
+            play_mode=mode,
+        )
+        enabled = bool(flags.get(key, default_feature_flags(mode).get(key, True)))
+        if mode != "advanced":
+            return enabled
+        if key == "command_agent_enabled":
+            return enabled and _config_bool(self.config, "command_agent_enabled", True)
+        if key == "state_patch_enabled":
+            return enabled and _config_bool(self.config, "allow_state_patch", True)
+        if key == "second_pass_resolution_enabled":
+            return enabled and _config_bool(self.config, "second_pass_resolution", True)
+        return enabled
 
     async def _command_agent_command_line(
         self,
@@ -1298,7 +1404,12 @@ class LLMTRPGPlugin(Star):
             content_type="application/json",
         )
 
-    def _gm_system_prompt(self) -> str:
+    def _gm_system_prompt(self, session: GameSession | None = None) -> str:
+        if session is not None and not self._session_feature_enabled(
+            session,
+            "structured_patch_enabled",
+        ):
+            return SIMPLE_GM_SYSTEM_PROMPT
         return str(self.config.get("gm_system_prompt") or DEFAULT_GM_SYSTEM_PROMPT)
 
     def _execute_dice_requests(
@@ -1318,6 +1429,8 @@ class LLMTRPGPlugin(Star):
         self,
         session: GameSession,
         patch: dict[str, Any],
+        *,
+        include_memory: bool = True,
     ) -> None:
         scene_patch = patch.get("scene_patch") or {}
         if isinstance(scene_patch, dict):
@@ -1325,6 +1438,8 @@ class LLMTRPGPlugin(Star):
                 value = scene_patch.get(key)
                 if value:
                     session.scene[key] = str(value)
+        if not include_memory:
+            return
         session.plot_threads.extend(
             item for item in patch.get("new_plot_threads", []) if item
         )
@@ -1376,6 +1491,9 @@ class LLMTRPGPlugin(Star):
     ) -> None:
         limit = max(1, _safe_int(self.config.get("max_recent_events"), 20))
         timeline_limit = _safe_int(self.config.get("max_timeline_events"), 80)
+        if not self._session_feature_enabled(session, "knowledge_enabled"):
+            session.recent_events = session.recent_events[-limit:]
+            return
         if len(session.recent_events) <= limit:
             compact_campaign_knowledge(session, max_timeline=timeline_limit)
             return
@@ -1384,7 +1502,7 @@ class LLMTRPGPlugin(Star):
                 self.context,
                 event,
                 prompt=build_summary_prompt(session),
-                system_prompt=self._gm_system_prompt(),
+                system_prompt=self._gm_system_prompt(session),
             )
             if summary:
                 session.history_summary = summary
@@ -1484,7 +1602,7 @@ class LLMTRPGPlugin(Star):
         if language == "en":
             return (
                 "LLM TRPG commands:\n"
-                "/trpg_start [theme] - start a session\n"
+                "/trpg_start [simple|advanced] [theme] - start a session\n"
                 "/trpg_join <name> <concept> - join as a PC\n"
                 "/trpg_join preset:<name> - join with your preset\n"
                 "/trpg_preset create <name> <concept> - create a preset\n"
@@ -1502,7 +1620,7 @@ class LLMTRPGPlugin(Star):
             )
         return (
             "LLM TRPG 指令：\n"
-            "/trpg_start [主题] - 启动跑团\n"
+            "/trpg_start [简易|进阶] [主题或剧本名] - 启动跑团\n"
             "/trpg_join <角色名> <一句话设定> - 加入并创建角色\n"
             "/trpg_join preset:<名称> - 使用自己的角色预设加入\n"
             "/trpg_preset create <名称> <一句话设定> - 创建角色预设\n"
@@ -1843,6 +1961,7 @@ def _parse_markdown_scenario(markdown: str) -> ScenarioScript:
         script_id="",
         title=title,
         language=_section_text(sections, "language") or "zh",
+        play_mode=_section_text(sections, "play_mode") or "advanced",
         theme=_section_text(sections, "theme") or title,
         summary=_section_text(sections, "summary"),
         background=_section_text(sections, "background"),
@@ -1853,6 +1972,9 @@ def _parse_markdown_scenario(markdown: str) -> ScenarioScript:
         turn_order_mode=_section_text(sections, "turn_order_mode") or "llm_gm",
         ruleset_id=_section_text(sections, "ruleset_id") or "d20_lite",
         rule_nodes=_parse_markdown_rule_nodes(_section_text(sections, "rule_nodes")),
+        feature_flags=_parse_markdown_feature_flags(
+            _section_text(sections, "feature_flags")
+        ),
     )
 
 
@@ -1875,6 +1997,11 @@ def _markdown_section_key(value: str) -> str:
         "theme": "theme",
         "语言": "language",
         "language": "language",
+        "模式": "play_mode",
+        "玩法模式": "play_mode",
+        "play_mode": "play_mode",
+        "play mode": "play_mode",
+        "mode": "play_mode",
         "标签": "tags",
         "tags": "tags",
         "行动顺序": "turn_order_mode",
@@ -1892,6 +2019,11 @@ def _markdown_section_key(value: str) -> str:
         "rule_nodes": "rule_nodes",
         "rule nodes": "rule_nodes",
         "checks": "rule_nodes",
+        "机制开关": "feature_flags",
+        "功能开关": "feature_flags",
+        "feature_flags": "feature_flags",
+        "feature flags": "feature_flags",
+        "features": "feature_flags",
         "gm 备注": "gm_notes",
         "gm备注": "gm_notes",
         "gm notes": "gm_notes",
@@ -1928,6 +2060,17 @@ def _parse_markdown_rule_nodes(value: str) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
     return []
+
+
+def _parse_markdown_feature_flags(value: str) -> dict[str, Any]:
+    text = str(value or "").strip()
+    if not text:
+        return {}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _coerce_config_updates(
@@ -2034,6 +2177,14 @@ def _split_first(value: str) -> tuple[str, str]:
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], parts[1]
+
+
+def _split_start_mode(value: str) -> tuple[str, str]:
+    first, rest = _split_first(str(value or "").strip())
+    mode = normalize_play_mode(first, default="")
+    if mode:
+        return mode, rest.strip()
+    return "", str(value or "").strip()
 
 
 def _one_line(value: str, limit: int) -> str:

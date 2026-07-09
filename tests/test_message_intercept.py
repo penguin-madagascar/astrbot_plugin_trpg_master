@@ -241,6 +241,93 @@ class MessageInterceptTests(unittest.TestCase):
         self.assertTrue(event.llm_blocked)
         self.assertTrue(event.stopped)
 
+    def test_simple_mode_routes_joined_plain_text_and_accepts_plain_gm_reply(self):
+        captured = {}
+
+        async def fail_agent(context, event, *, prompt, system_prompt):
+            raise AssertionError("simple mode should not run command agent")
+
+        async def fake_call_gm(context, event, *, prompt, system_prompt):
+            captured["prompt"] = prompt
+            return "Alice 查看房间。"
+
+        session = make_session()
+        session.play_mode = "simple"
+        session.feature_flags = {
+            "command_agent_enabled": False,
+            "turn_order_enabled": False,
+            "structured_patch_enabled": False,
+            "dice_requests_enabled": False,
+            "state_patch_enabled": False,
+            "knowledge_enabled": False,
+            "second_pass_resolution_enabled": False,
+        }
+        plugin = LLMTRPGPlugin(
+            context=object(),
+            config={"command_agent_enabled": True, "strict_json_patch": True},
+        )
+        plugin.storage = FakeStorage(session)
+        event = FakeEvent(user_id="u1", sender_name="Dana", message="查看房间")
+
+        with patch.object(main, "call_command_agent", fail_agent), patch.object(
+            main,
+            "call_gm",
+            fake_call_gm,
+        ):
+            outputs = asyncio.run(_collect(plugin.trpg_message_intercept(event)))
+
+        self.assertEqual(outputs, ["Alice 查看房间。"])
+        self.assertIn("简易模式", captured["prompt"])
+        self.assertNotIn("JSON 格式必须符合", captured["prompt"])
+        self.assertEqual(session.turn_count, 1)
+        self.assertTrue(event.llm_blocked)
+        self.assertTrue(event.stopped)
+
+    def test_custom_mode_disabled_mechanics_do_not_apply_gm_patch(self):
+        calls = []
+
+        async def fake_call_gm(context, event, *, prompt, system_prompt):
+            calls.append(prompt)
+            if len(calls) > 1:
+                raise AssertionError("second pass should be disabled")
+            return (
+                "Alice 搜索房间。\n"
+                "```json\n"
+                "{\n"
+                "  \"dice_requests\": [{\"id\": \"d1\", \"type\": \"skill_check\", "
+                "\"actor\": \"Alice\", \"skill\": \"DEX\", \"dc\": 12}],\n"
+                "  \"state_patches\": [{\"target\": \"pc:Alice\", \"op\": \"hp_delta\", "
+                "\"value\": -3}],\n"
+                "  \"knowledge_patches\": [{\"op\": \"add_fact\", \"text\": \"暗门存在\"}],\n"
+                "  \"memory_notes\": [\"发现暗门\"]\n"
+                "}\n"
+                "```"
+            )
+
+        session = make_session()
+        session.play_mode = "custom"
+        session.feature_flags = {
+            "command_agent_enabled": True,
+            "turn_order_enabled": False,
+            "structured_patch_enabled": True,
+            "dice_requests_enabled": False,
+            "state_patch_enabled": False,
+            "knowledge_enabled": False,
+            "second_pass_resolution_enabled": False,
+        }
+        plugin = LLMTRPGPlugin(context=object(), config={"allow_state_patch": True})
+        plugin.storage = FakeStorage(session)
+        event = FakeEvent(user_id="u1", sender_name="Dana", message="/trpg_act 搜索房间")
+
+        with patch.object(main, "call_gm", fake_call_gm):
+            outputs = asyncio.run(_collect(plugin.trpg_message_intercept(event)))
+
+        self.assertEqual(outputs, ["Alice 搜索房间。"])
+        self.assertEqual(session.players["u1"].hp, 10)
+        self.assertEqual(session.campaign_knowledge.facts, [])
+        self.assertEqual(session.recent_events[-1], "Dana: 搜索房间 -> Alice 搜索房间。")
+        self.assertEqual(len(calls), 1)
+
     def test_joined_player_plain_message_is_routed_to_trpg_act_and_stopped(self):
         captured = {}
 

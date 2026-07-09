@@ -51,6 +51,46 @@ def test_parse_scenario_json_import_accepts_single_script():
     ]
 
 
+def test_parse_scenario_json_import_accepts_play_mode_and_feature_flags():
+    payload = json.dumps(
+        {
+            "script_id": "fog-town",
+            "title": "雾镇",
+            "play_mode": "custom",
+            "feature_flags": {
+                "command_agent_enabled": False,
+                "turn_order_enabled": False,
+                "structured_patch_enabled": False,
+                "dice_requests_enabled": False,
+                "state_patch_enabled": False,
+                "knowledge_enabled": False,
+                "second_pass_resolution_enabled": False,
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    script = _parse_scenario_import(payload, filename="scripts.json")[0]
+
+    assert script.play_mode == "custom"
+    assert script.feature_flags == {
+        "command_agent_enabled": False,
+        "turn_order_enabled": False,
+        "structured_patch_enabled": False,
+        "dice_requests_enabled": False,
+        "state_patch_enabled": False,
+        "knowledge_enabled": False,
+        "second_pass_resolution_enabled": False,
+    }
+
+
+def test_scenario_defaults_to_advanced_mode_for_existing_data():
+    script = ScenarioScript.from_dict({"script_id": "fog-town", "title": "雾镇"})
+
+    assert script.play_mode == "advanced"
+    assert script.feature_flags["structured_patch_enabled"] is True
+
+
 def test_parse_scenario_markdown_import_uses_expected_sections():
     markdown = """
 # 雾镇
@@ -86,6 +126,31 @@ soft
     assert script.hooks == ["钟楼停摆", "旧井低语"]
     assert script.gm_notes == "慢节奏调查。"
     assert script.turn_order_mode == "soft"
+
+
+def test_parse_scenario_markdown_import_supports_play_mode_and_flags():
+    markdown = """
+# 雾镇
+
+## 模式
+custom
+
+## 机制开关
+{
+  "command_agent_enabled": false,
+  "turn_order_enabled": false,
+  "structured_patch_enabled": false,
+  "dice_requests_enabled": false,
+  "state_patch_enabled": false,
+  "knowledge_enabled": false,
+  "second_pass_resolution_enabled": false
+}
+""".strip()
+
+    script = _parse_scenario_import(markdown, filename="fog.md")[0]
+
+    assert script.play_mode == "custom"
+    assert all(value is False for value in script.feature_flags.values())
 
 
 def test_parse_scenario_markdown_invalid_turn_order_mode_uses_default():
@@ -197,6 +262,20 @@ def test_dashboard_exposes_script_ruleset_and_rule_nodes_fields():
     assert "formatRuleNodes(script.rule_nodes || [])" in js
 
 
+def test_dashboard_exposes_script_play_mode_and_feature_flags_fields():
+    html = Path("pages/dashboard/index.html").read_text(encoding="utf-8")
+    js = Path("pages/dashboard/app.js").read_text(encoding="utf-8")
+
+    assert 'id="script-play-mode"' in html
+    assert 'value="simple"' in html
+    assert 'value="advanced"' in html
+    assert 'value="custom"' in html
+    assert 'id="script-feature-flags"' in html
+    assert "play_mode: document.getElementById(\"script-play-mode\")" in js
+    assert "feature_flags: collectFeatureFlags()" in js
+    assert "playModeLabel(script.play_mode)" in js
+
+
 def test_trpg_start_uses_matching_scenario_script(monkeypatch):
     captured = {}
 
@@ -260,6 +339,47 @@ def test_trpg_start_uses_matching_scenario_script(monkeypatch):
     assert "图书馆检定" in captured["prompt"]
 
 
+def test_trpg_start_free_theme_defaults_to_simple_mode(monkeypatch):
+    async def fake_call_gm(context, event, *, prompt, system_prompt):
+        assert "简易模式" in prompt
+        return "自由开场。"
+
+    monkeypatch.setattr(main, "call_gm", fake_call_gm)
+    storage = FakeStorage({})
+    plugin = LLMTRPGPlugin(
+        context=object(),
+        config={"turn_order_enabled": True, "turn_order_mode": "llm_gm"},
+    )
+    plugin.storage = storage
+
+    outputs = asyncio.run(_collect(plugin.trpg_start(FakeEvent(), "海上奇遇")))
+
+    assert outputs == ["自由开场。"]
+    assert storage.session.title == "海上奇遇"
+    assert storage.session.play_mode == "simple"
+    assert storage.session.feature_flags["structured_patch_enabled"] is False
+    assert storage.session.turn_order.enabled is False
+
+
+def test_trpg_start_free_theme_can_request_advanced_mode(monkeypatch):
+    async def fake_call_gm(context, event, *, prompt, system_prompt):
+        assert "JSON" in prompt
+        return "进阶开场。"
+
+    monkeypatch.setattr(main, "call_gm", fake_call_gm)
+    storage = FakeStorage({})
+    plugin = LLMTRPGPlugin(context=object(), config={"turn_order_mode": "soft"})
+    plugin.storage = storage
+
+    outputs = asyncio.run(_collect(plugin.trpg_start(FakeEvent(), "进阶 海上奇遇")))
+
+    assert outputs == ["进阶开场。"]
+    assert storage.session.title == "海上奇遇"
+    assert storage.session.play_mode == "advanced"
+    assert storage.session.feature_flags["structured_patch_enabled"] is True
+    assert storage.session.turn_order.enabled is True
+
+
 def test_trpg_start_keeps_free_theme_when_no_scenario_matches(monkeypatch):
     captured = {}
 
@@ -280,7 +400,7 @@ def test_trpg_start_keeps_free_theme_when_no_scenario_matches(monkeypatch):
     )
     plugin.storage = storage
 
-    outputs = asyncio.run(_collect(plugin.trpg_start(FakeEvent(), "海上奇遇")))
+    outputs = asyncio.run(_collect(plugin.trpg_start(FakeEvent(), "进阶 海上奇遇")))
 
     assert outputs == ["自由开场。"]
     assert storage.session.title == "海上奇遇"

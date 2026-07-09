@@ -127,6 +127,7 @@ def test_scenario_script_serialization_restores_defaults_and_context():
     assert restored.to_session_context() == {
         "script_id": "fog-town",
         "title": "雾镇",
+        "play_mode": "advanced",
         "summary": "被浓雾封锁的小镇。",
         "background": "",
         "opening_scene": "",
@@ -136,6 +137,15 @@ def test_scenario_script_serialization_restores_defaults_and_context():
         "turn_order_mode": "llm_gm",
         "ruleset_id": "d20_lite",
         "rule_nodes": [],
+        "feature_flags": {
+            "command_agent_enabled": True,
+            "turn_order_enabled": True,
+            "structured_patch_enabled": True,
+            "dice_requests_enabled": True,
+            "state_patch_enabled": True,
+            "knowledge_enabled": True,
+            "second_pass_resolution_enabled": True,
+        },
     }
 
 

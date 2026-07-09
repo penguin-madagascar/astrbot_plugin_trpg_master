@@ -32,6 +32,13 @@ JSON 的 key 必须保持英文，方便 Python 解析。除 JSON key 外，叙�
 如果玩家行动存在风险、不确定性或对抗，必须请求 dice_request。
 """.strip()
 
+SIMPLE_GM_SYSTEM_PROMPT = """
+你是轻量文字冒险 GM。你要根据主题、剧本资料和玩家行动推进故事。
+简易模式不要求结构化 JSON、骰子检定、状态补丁或战役知识库维护。
+只输出面向玩家的叙事文本，保持 150-300 字，描述当前场景、行动后果和 1-3 个开放线索。
+不要替玩家做决定，不要输出 Markdown JSON fenced block。
+""".strip()
+
 
 PATCH_SCHEMA = {
     "dice_requests": [
@@ -113,6 +120,8 @@ def session_snapshot(session: GameSession) -> dict[str, Any]:
         "theme": session.theme,
         "language": session.language,
         "ruleset_id": session.ruleset_id,
+        "play_mode": getattr(session, "play_mode", "advanced"),
+        "feature_flags": dict(getattr(session, "feature_flags", {}) or {}),
         "status": session.status,
         "turn_count": session.turn_count,
         "scene": session.scene,
@@ -145,6 +154,15 @@ def build_opening_prompt(session: GameSession) -> str:
     language = language_name(session.language)
     scenario = _format_scenario_context(session.scenario_script)
     scenario_part = f"\n剧本资料：\n{scenario}\n" if scenario else ""
+    if not _feature_enabled(session, "structured_patch_enabled"):
+        return (
+            f"本次 session 的输出语言是 {language}。\n"
+            f"主题：{session.theme}\n"
+            "玩法模式：简易模式。\n"
+            f"{scenario_part}"
+            "请生成轻量文字冒险开场，只输出面向玩家的叙事文本，不要输出 JSON。\n"
+            "需要包含当前场景、主要氛围、即时目标和 1-3 个开放线索；可以给出选项，也可以鼓励自由探索。"
+        )
     ruleset = _format_ruleset_context(session)
     return (
         f"本次 session 的输出语言是 {language}。\n"
@@ -159,26 +177,61 @@ def build_opening_prompt(session: GameSession) -> str:
 def build_action_prompt(session: GameSession, actor: str, action: str) -> str:
     language = language_name(session.language)
     snapshot = json.dumps(session_snapshot(session), ensure_ascii=False, indent=2)
-    schema = json.dumps(PATCH_SCHEMA, ensure_ascii=False, indent=2)
+    if not _feature_enabled(session, "structured_patch_enabled"):
+        return (
+            f"当前 session 的输出语言是 {language}。\n"
+            "玩法模式：简易模式。\n"
+            "只输出面向玩家的叙事文本，不要输出 JSON、骰子请求、状态补丁或系统说明。\n"
+            "保持故事风格一致，描述玩家行动后果、环境变化和 1-3 个开放线索。\n"
+            "当前 session 快照：\n"
+            f"{snapshot}\n\n"
+            f"行动玩家：{actor}\n"
+            f"玩家行动：{action}"
+        )
+    schema = json.dumps(_patch_schema_for_session(session), ensure_ascii=False, indent=2)
     ruleset = _format_ruleset_context(session)
-    memory_context = build_memory_context(
-        session,
-        actor=actor,
-        action=action,
-        visibility="gm",
+    memory_context = (
+        build_memory_context(
+            session,
+            actor=actor,
+            action=action,
+            visibility="gm",
+        )
+        if _feature_enabled(session, "knowledge_enabled")
+        else ""
+    )
+    dice_instruction = (
+        "规则系统和检定节点如下；dice_requests 必须匹配当前规则系统。\n"
+        f"{ruleset}\n"
+        if _feature_enabled(session, "dice_requests_enabled")
+        else "本模式已关闭系统骰子检定，不要提出 dice_requests。\n"
+    )
+    knowledge_instruction = (
+        "请用 knowledge_patches 维护长期战役知识库：人物、地点、线索、秘密、时间线、承诺、伏笔和未解决冲突。"
+        "visibility 可用 public/private/gm_only；不得通过玩家可见叙事泄露 gm_only 内容。\n"
+        if _feature_enabled(session, "knowledge_enabled")
+        else "本模式已关闭战役知识库，不要提出 knowledge_patches、new_plot_threads 或 memory_notes。\n"
+    )
+    turn_instruction = (
+        "如果 turn_order.mode 是 llm_gm，请用 turn_controls 主持行动顺序；可用 op 包括 "
+        "set_phase、set_queue、set_current、advance、pause、resume、control_note。"
+        "不要直接改写 turn_order，系统会校验角色名和队列。\n"
+        if _feature_enabled(session, "turn_order_enabled")
+        else "本模式已关闭行动顺序控制，不要提出 turn_controls。\n"
+    )
+    state_instruction = (
+        "不要写死骰子结果。不要直接修改角色状态，只能提出 state_patches。\n"
+        if _feature_enabled(session, "state_patch_enabled")
+        else "不要提出 state_patches；角色状态不会在本模式自动变更。\n"
     )
     return (
         f"当前 session 的输出语言是 {language}。\n"
         "除 JSON key 外，叙事、NPC 台词、reason、memory_notes、plot_threads 都必须使用该语言。\n"
         "JSON key 必须保持英文。\n"
-        "不要写死骰子结果。不要直接修改角色状态，只能提出 state_patches。\n"
-        "规则系统和检定节点如下；dice_requests 必须匹配当前规则系统。\n"
-        f"{ruleset}\n"
-        "请用 knowledge_patches 维护长期战役知识库：人物、地点、线索、秘密、时间线、承诺、伏笔和未解决冲突。"
-        "visibility 可用 public/private/gm_only；不得通过玩家可见叙事泄露 gm_only 内容。\n"
-        "如果 turn_order.mode 是 llm_gm，请用 turn_controls 主持行动顺序；可用 op 包括 "
-        "set_phase、set_queue、set_current、advance、pause、resume、control_note。"
-        "不要直接改写 turn_order，系统会校验角色名和队列。\n"
+        f"{state_instruction}"
+        f"{dice_instruction}"
+        f"{knowledge_instruction}"
+        f"{turn_instruction}"
         "当前 session 快照：\n"
         f"{snapshot}\n\n"
         "相关战役记忆：\n"
@@ -309,6 +362,26 @@ def _format_ruleset_context(session: GameSession) -> str:
                 + (f"；检定：{check_text}" if check else "")
             )
     return "\n".join(lines)
+
+
+def _feature_enabled(session: GameSession, key: str, default: bool = True) -> bool:
+    flags = getattr(session, "feature_flags", {}) or {}
+    return bool(flags.get(key, default))
+
+
+def _patch_schema_for_session(session: GameSession) -> dict[str, Any]:
+    schema = dict(PATCH_SCHEMA)
+    if not _feature_enabled(session, "dice_requests_enabled"):
+        schema["dice_requests"] = []
+    if not _feature_enabled(session, "state_patch_enabled"):
+        schema["state_patches"] = []
+    if not _feature_enabled(session, "knowledge_enabled"):
+        schema["knowledge_patches"] = []
+        schema["new_plot_threads"] = []
+        schema["memory_notes"] = []
+    if not _feature_enabled(session, "turn_order_enabled"):
+        schema["turn_controls"] = []
+    return schema
 
 
 def _turn_order_snapshot(session: GameSession) -> dict[str, Any]:

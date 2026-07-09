@@ -32,6 +32,7 @@ const scriptFields = {
   title: document.getElementById("script-title"),
   language: document.getElementById("script-language"),
   ruleset_id: document.getElementById("script-ruleset-id"),
+  play_mode: document.getElementById("script-play-mode"),
   turn_order_mode: document.getElementById("script-turn-order-mode"),
   theme: document.getElementById("script-theme"),
   summary: document.getElementById("script-summary"),
@@ -42,6 +43,16 @@ const scriptFields = {
   gm_notes: document.getElementById("script-notes"),
   rule_nodes: document.getElementById("script-rule-nodes"),
 };
+
+const featureFlagKeys = [
+  "command_agent_enabled",
+  "turn_order_enabled",
+  "structured_patch_enabled",
+  "dice_requests_enabled",
+  "state_patch_enabled",
+  "knowledge_enabled",
+  "second_pass_resolution_enabled",
+];
 
 function showStatus(message, isError = false) {
   els.status.textContent = message;
@@ -157,10 +168,20 @@ function renderScripts() {
     const title = document.createElement("strong");
     title.textContent = script.title || "未命名剧本";
     const meta = document.createElement("span");
-    meta.textContent = `${script.language || "zh"} · ${rulesetLabel(script.ruleset_id)} · ${turnOrderModeLabel(script.turn_order_mode)} · ${script.theme || script.title || ""}`;
+    meta.textContent = `${script.language || "zh"} · ${playModeLabel(script.play_mode)} · ${rulesetLabel(script.ruleset_id)} · ${turnOrderModeLabel(script.turn_order_mode)} · ${script.theme || script.title || ""}`;
     button.append(title, meta);
     els.scripts.append(button);
   });
+}
+
+function playModeLabel(mode) {
+  if (mode === "simple") {
+    return "简易";
+  }
+  if (mode === "custom") {
+    return "自定义";
+  }
+  return "进阶";
 }
 
 function rulesetLabel(rulesetId) {
@@ -224,6 +245,7 @@ function selectScript(scriptId) {
   scriptFields.title.value = script.title || "";
   scriptFields.language.value = script.language || "zh";
   scriptFields.ruleset_id.value = script.ruleset_id || "d20_lite";
+  scriptFields.play_mode.value = script.play_mode || "advanced";
   scriptFields.turn_order_mode.value = script.turn_order_mode || "llm_gm";
   scriptFields.theme.value = script.theme || "";
   scriptFields.summary.value = script.summary || "";
@@ -233,6 +255,8 @@ function selectScript(scriptId) {
   scriptFields.tags.value = (script.tags || []).join(", ");
   scriptFields.gm_notes.value = script.gm_notes || "";
   scriptFields.rule_nodes.value = formatRuleNodes(script.rule_nodes || []);
+  applyFeatureFlags(script.feature_flags || defaultFeatureFlags(scriptFields.play_mode.value));
+  updateFeatureFlagVisibility();
   els.deleteScript.disabled = false;
   renderScripts();
 }
@@ -244,8 +268,11 @@ function startNewScript() {
   });
   scriptFields.language.value = "zh";
   scriptFields.ruleset_id.value = "d20_lite";
+  scriptFields.play_mode.value = "advanced";
   scriptFields.turn_order_mode.value = "llm_gm";
   scriptFields.rule_nodes.value = "[]";
+  applyFeatureFlags(defaultFeatureFlags("advanced"));
+  updateFeatureFlagVisibility();
   els.deleteScript.disabled = true;
   renderScripts();
 }
@@ -255,6 +282,7 @@ function collectScriptPayload() {
     title: scriptFields.title.value.trim(),
     language: scriptFields.language.value,
     ruleset_id: scriptFields.ruleset_id.value,
+    play_mode: scriptFields.play_mode.value,
     turn_order_mode: scriptFields.turn_order_mode.value,
     theme: scriptFields.theme.value.trim(),
     summary: scriptFields.summary.value.trim(),
@@ -264,11 +292,43 @@ function collectScriptPayload() {
     gm_notes: scriptFields.gm_notes.value.trim(),
     tags: splitTags(scriptFields.tags.value),
     rule_nodes: parseRuleNodes(scriptFields.rule_nodes.value),
+    feature_flags: collectFeatureFlags(),
   };
   if (state.currentScriptId) {
     payload.script_id = state.currentScriptId;
   }
   return payload;
+}
+
+function defaultFeatureFlags(mode) {
+  const enabled = mode !== "simple";
+  return Object.fromEntries(featureFlagKeys.map((key) => [key, enabled]));
+}
+
+function featureFlagInputs() {
+  return Array.from(document.querySelectorAll("[data-feature-flag]"));
+}
+
+function applyFeatureFlags(flags) {
+  const values = flags || {};
+  const defaults = defaultFeatureFlags(scriptFields.play_mode.value || "advanced");
+  featureFlagInputs().forEach((input) => {
+    const key = input.dataset.featureFlag;
+    input.checked = values[key] ?? defaults[key] ?? true;
+  });
+}
+
+function collectFeatureFlags() {
+  const flags = {};
+  featureFlagInputs().forEach((input) => {
+    flags[input.dataset.featureFlag] = input.checked;
+  });
+  return flags;
+}
+
+function updateFeatureFlagVisibility() {
+  const fieldset = document.getElementById("script-feature-flags");
+  fieldset.hidden = scriptFields.play_mode.value !== "custom";
 }
 
 function splitLines(value) {
@@ -382,6 +442,10 @@ function bindEvents() {
   });
   els.scriptSearch.addEventListener("input", renderScripts);
   els.newScript.addEventListener("click", startNewScript);
+  scriptFields.play_mode.addEventListener("change", () => {
+    applyFeatureFlags(defaultFeatureFlags(scriptFields.play_mode.value));
+    updateFeatureFlagVisibility();
+  });
   els.scriptForm.addEventListener("submit", (event) => runAction(() => saveScript(event)));
   els.deleteScript.addEventListener("click", () => runAction(deleteCurrentScript));
   els.settingsForm.addEventListener("submit", (event) => runAction(() => saveSettings(event)));

@@ -79,6 +79,14 @@
               </div>
 
               <div class="grid two">
+                <label class="field" for="script-play-mode">
+                  <span>玩法模式</span>
+                  <select id="script-play-mode" name="play_mode">
+                    <option value="simple">简易模式</option>
+                    <option value="advanced">进阶模式</option>
+                    <option value="custom">自定义模式</option>
+                  </select>
+                </label>
                 <label class="field" for="script-turn-order-mode">
                   <span>行动顺序模式</span>
                   <select id="script-turn-order-mode" name="turn_order_mode">
@@ -87,6 +95,38 @@
                   </select>
                 </label>
               </div>
+
+              <fieldset id="script-feature-flags" class="feature-flags">
+                <legend>自定义机制开关</legend>
+                <label class="checkbox-row">
+                  <input type="checkbox" data-feature-flag="command_agent_enabled" />
+                  <span>命令转换 Agent</span>
+                </label>
+                <label class="checkbox-row">
+                  <input type="checkbox" data-feature-flag="turn_order_enabled" />
+                  <span>行动顺序</span>
+                </label>
+                <label class="checkbox-row">
+                  <input type="checkbox" data-feature-flag="structured_patch_enabled" />
+                  <span>结构化 JSON</span>
+                </label>
+                <label class="checkbox-row">
+                  <input type="checkbox" data-feature-flag="dice_requests_enabled" />
+                  <span>骰子检定</span>
+                </label>
+                <label class="checkbox-row">
+                  <input type="checkbox" data-feature-flag="state_patch_enabled" />
+                  <span>状态变更</span>
+                </label>
+                <label class="checkbox-row">
+                  <input type="checkbox" data-feature-flag="knowledge_enabled" />
+                  <span>战役知识库</span>
+                </label>
+                <label class="checkbox-row">
+                  <input type="checkbox" data-feature-flag="second_pass_resolution_enabled" />
+                  <span>二次结算叙事</span>
+                </label>
+              </fieldset>
 
               <label class="field" for="script-theme">
                 <span>主题</span>

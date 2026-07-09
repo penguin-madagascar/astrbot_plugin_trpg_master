@@ -10,6 +10,7 @@
 
 - 通过 `/trpg_start` 启动中文、英文、日文或韩文跑团。
 - 支持玩家加入、角色预设、角色卡查看、行动顺序、状态查看和战役回顾。
+- 支持剧本玩法模式：简易、进阶和自定义。
 - 支持规则系统：内置 `d20_lite` 与 `coc7_lite`，剧本可指定规则并配置检定节点。
 - 行动顺序支持两种模式：剧本级 `llm_gm`（LLM 主持人强控制）和 `soft`（玩家软顺序）。
 - 支持基础骰子表达式和 GIF 掷骰结果，依赖 `Pillow`。
@@ -69,7 +70,7 @@ Pillow>=10.0.0
 | 指令 | 说明 |
 | --- | --- |
 | `/trpg_help` | 显示帮助。 |
-| `/trpg_start [主题或剧本名]` | 启动新的跑团。 |
+| `/trpg_start [简易\|进阶] [主题或剧本名]` | 启动新的跑团；自由主题未指定模式时默认简易模式。 |
 | `/trpg_join <角色名> <一句话设定>` | 加入当前跑团并创建角色。 |
 | `/trpg_join preset:<名称>` | 使用自己的角色预设加入跑团。 |
 | `/trpg_preset create <名称> <一句话设定>` | 创建角色预设。 |
@@ -100,6 +101,14 @@ GM JSON 中的 `dice_requests` 会由当前规则系统解析，模型不能直�
 
 角色预设也带有 `ruleset_id`。使用 `/trpg_join preset:<名称>` 时，预设规则必须与当前跑团规则一致。
 
+## 玩法模式
+
+跑团会话会记录 `play_mode` 和一组核心机制开关。使用 `/trpg_start 剧本名` 命中剧本时，默认使用剧本自身模式；旧剧本缺失模式字段时按进阶模式处理，保留既有复杂机制。使用 `/trpg_start 海上奇遇` 这类一句话自由主题创建时，如果没有写明模式，默认使用简易模式。也可以显式使用 `/trpg_start 进阶 海上奇遇`。
+
+- `simple` / 简易模式：保留 `/trpg_join` 角色加入流程，但关闭命令转换 Agent、行动顺序、结构化 JSON、骰子检定、状态补丁、战役知识库和二次结算。GM 可以像轻量文字冒险一样只返回纯叙事文本。
+- `advanced` / 进阶模式：接近此前默认跑团行为，启用绝大部分机制；命令转换、状态补丁和二次结算仍尊重插件全局配置。
+- `custom` / 自定义模式：使用剧本内 `feature_flags` 逐项控制核心机制。可用开关包括 `command_agent_enabled`、`turn_order_enabled`、`structured_patch_enabled`、`dice_requests_enabled`、`state_patch_enabled`、`knowledge_enabled` 和 `second_pass_resolution_enabled`。
+
 ## 行动顺序模式
 
 每个剧本可以单独设置行动顺序模式，使用 `/trpg_start 剧本名` 启动时会覆盖全局配置；只有自由主题跑团才使用 `turn_order_mode` 全局兜底。
@@ -112,9 +121,11 @@ GM JSON 中的 `dice_requests` 会由当前规则系统解析，模型不能直�
 插件会注册 AstrBot 插件页面，用于：
 
 - 编辑和删除剧本。
+- 为每个剧本选择简易、进阶或自定义玩法模式。
+- 自定义模式下逐项启用或关闭核心机制。
 - 为每个剧本选择行动顺序模式。
 - 为每个剧本选择规则系统并编辑检定节点 JSON。
-- 导入 Markdown 或 JSON 剧本；Markdown 可用 `## 行动顺序`、`## turn_order_mode` 或 `## turn order` 指定 `llm_gm`/`soft`，可用 `## 规则` 指定 `ruleset_id`，可用 `## 检定节点` 填写 JSON 对象或对象数组。
+- 导入 Markdown 或 JSON 剧本；Markdown 可用 `## 模式` 指定 `simple`/`advanced`/`custom`，可用 `## 机制开关` 填写 `feature_flags` JSON 对象，可用 `## 行动顺序`、`## turn_order_mode` 或 `## turn order` 指定 `llm_gm`/`soft`，可用 `## 规则` 指定 `ruleset_id`，可用 `## 检定节点` 填写 JSON 对象或对象数组。
 - 导出剧本 JSON。
 - 查看战役知识库。
 - 调整 `_conf_schema.json` 中声明的插件配置。
