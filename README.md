@@ -10,6 +10,7 @@
 
 - 通过 `/trpg_start` 启动中文、英文、日文或韩文跑团。
 - 支持玩家加入、角色预设、角色卡查看、行动顺序、状态查看和战役回顾。
+- 支持规则系统：内置 `d20_lite` 与 `coc7_lite`，剧本可指定规则并配置检定节点。
 - 行动顺序支持两种模式：剧本级 `llm_gm`（LLM 主持人强控制）和 `soft`（玩家软顺序）。
 - 支持基础骰子表达式和 GIF 掷骰结果，依赖 `Pillow`。
 - 支持 GM 返回结构化 JSON，由插件执行骰子请求、应用白名单状态变更并记录日志。
@@ -50,6 +51,7 @@ Pillow>=10.0.0
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `default_theme` | `奇幻冒险` | `/trpg_start` 未指定主题时使用的默认主题。 |
+| `default_ruleset_id` | `d20_lite` | 自由主题跑团使用的默认规则系统；匹配剧本时以剧本内 `ruleset_id` 为准。可用值：`d20_lite`、`coc7_lite`。 |
 | `gm_system_prompt` | 内置提示词 | 约束 GM/KP 的叙事、骰子请求和状态变更输出。 |
 | `max_recent_events` | `20` | 近期事件保留上限，超出后尝试压缩剧情摘要。 |
 | `max_timeline_events` | `80` | 战役时间线保留上限。 |
@@ -87,6 +89,17 @@ Pillow>=10.0.0
 
 如果 `command_agent_enabled` 开启，跑团进行中玩家也可以直接发送自然语言，插件会尝试转换为当前阶段允许的 `/trpg_*` 命令。普通非 TRPG 斜杠命令不会被本插件拦截。
 
+## 规则系统
+
+跑团会话和剧本都带有 `ruleset_id`。自由主题跑团使用全局 `default_ruleset_id`；使用 `/trpg_start 剧本名` 命中剧本时，使用剧本自身规则。
+
+- `d20_lite`：支持 d20 属性/技能检定、豁免、优势/劣势、对抗检定、基础伤害和治疗。
+- `coc7_lite`：支持 d100 技能/属性检定、普通/困难/极难成功等级、奖励/惩罚骰和 SAN 检定。
+
+GM JSON 中的 `dice_requests` 会由当前规则系统解析，模型不能直接写死骰点。规则检定生成的状态变化会和 GM 提出的 `state_patches` 一起通过白名单校验；常用状态操作包括 `hp_delta`、`san_delta`、`damage`、`heal`、`resource_delta`、`skill_delta`、`add_status` 和 `remove_status`。
+
+角色预设也带有 `ruleset_id`。使用 `/trpg_join preset:<名称>` 时，预设规则必须与当前跑团规则一致。
+
 ## 行动顺序模式
 
 每个剧本可以单独设置行动顺序模式，使用 `/trpg_start 剧本名` 启动时会覆盖全局配置；只有自由主题跑团才使用 `turn_order_mode` 全局兜底。
@@ -100,7 +113,8 @@ Pillow>=10.0.0
 
 - 编辑和删除剧本。
 - 为每个剧本选择行动顺序模式。
-- 导入 Markdown 或 JSON 剧本；Markdown 可用 `## 行动顺序`、`## turn_order_mode` 或 `## turn order` 指定 `llm_gm`/`soft`。
+- 为每个剧本选择规则系统并编辑检定节点 JSON。
+- 导入 Markdown 或 JSON 剧本；Markdown 可用 `## 行动顺序`、`## turn_order_mode` 或 `## turn order` 指定 `llm_gm`/`soft`，可用 `## 规则` 指定 `ruleset_id`，可用 `## 检定节点` 填写 JSON 对象或对象数组。
 - 导出剧本 JSON。
 - 查看战役知识库。
 - 调整 `_conf_schema.json` 中声明的插件配置。
@@ -119,6 +133,12 @@ Pillow>=10.0.0
 
 ```bash
 .venv/bin/python -m pytest
+```
+
+如果需要新建本地开发环境，安装测试依赖：
+
+```bash
+python3 -m pip install -r requirements-dev.txt
 ```
 
 发布前建议检查：
