@@ -86,6 +86,7 @@ except ModuleNotFoundError:  # pragma: no cover - local syntax checks outside As
         return decorator
 
 try:
+    from . import event_utils
     from . import preset_commands
     from . import presentation
     from . import scenario_io
@@ -137,6 +138,7 @@ try:
         is_turn_order_active,
     )
 except ImportError:  # pragma: no cover - direct module loading outside package.
+    import event_utils
     import preset_commands
     import presentation
     import scenario_io
@@ -226,11 +228,11 @@ class LLMTRPGPlugin(Star):
         if not session:
             return
 
-        raw_message = _event_message_text(event)
+        raw_message = event_utils.event_message_text(event)
         stripped = raw_message.strip()
         if stripped.startswith("/") and not stripped.lower().startswith("/trpg_"):
             return
-        sender_id = _sender_id(event)
+        sender_id = event_utils.sender_id(event)
         is_direct_trpg_command = stripped.lower().startswith("/trpg_")
         command_agent_enabled = self._session_feature_enabled(
             session,
@@ -243,7 +245,7 @@ class LLMTRPGPlugin(Star):
         ):
             return
 
-        _block_default_llm(event)
+        event_utils.block_default_llm(event)
         try:
             if not stripped:
                 yield event.plain_result("无法处理空的跑团输入。")
@@ -287,12 +289,12 @@ class LLMTRPGPlugin(Star):
             logger.exception("TRPG intercepted message handling failed")
             yield event.plain_result("跑团输入处理失败。")
         finally:
-            _stop_event(event)
+            event_utils.stop_event(event)
 
     @filter.command("trpg_help", desc="显示 LLM TRPG 插件帮助。")
     async def trpg_help(self, event: AstrMessageEvent):
         try:
-            session = await self.storage.load_session(_session_id(event))
+            session = await self.storage.load_session(event_utils.session_id(event))
             language = session.language if session and session.status == "running" else "zh"
             yield event.plain_result(presentation.help_text(language))
         except Exception:
@@ -301,7 +303,7 @@ class LLMTRPGPlugin(Star):
 
     @filter.command("trpg_start", desc="启动新的 LLM TRPG 跑团。")
     async def trpg_start(self, event: AstrMessageEvent, theme: GreedyStr = ""):
-        session_id = _session_id(event)
+        session_id = event_utils.session_id(event)
         existing = await self.storage.load_session(session_id)
         if existing and existing.status == "running":
             yield event.plain_result(presentation.message(existing.language, "session_running"))
@@ -317,7 +319,7 @@ class LLMTRPGPlugin(Star):
                 return
 
         raw_theme = str(theme or "").strip()
-        requested_mode, script_query = _split_start_mode(raw_theme)
+        requested_mode, script_query = event_utils.split_start_mode(raw_theme)
         default_theme = str(self.config.get("default_theme") or "奇幻冒险")
         script = (
             await self.storage.find_scenario_script(script_query)
@@ -379,13 +381,13 @@ class LLMTRPGPlugin(Star):
             logger.exception("TRPG opening generation failed")
             opening = presentation.message(language, "started_fallback")
 
-        session.scene["description"] = _one_line(opening, 500)
+        session.scene["description"] = event_utils.one_line(opening, 500)
         session.recent_events.append(f"Session started: {session_theme}")
         session.add_log(
-            user=_sender_label(event),
+            user=event_utils.sender_label(event),
             command="trpg_start",
             input_text=session_theme,
-            output_summary=_one_line(opening, 160),
+            output_summary=event_utils.one_line(opening, 160),
         )
         await self.storage.save_session(session)
         yield event.plain_result(opening)
@@ -406,7 +408,7 @@ class LLMTRPGPlugin(Star):
                 if not preset_name:
                     yield event.plain_result(presentation.message(session.language, "join_usage"))
                     return
-                user_id = _sender_id(event)
+                user_id = event_utils.sender_id(event)
                 presets = await self.storage.load_presets(user_id)
                 preset = presets.get(preset_name)
                 if preset is None:
@@ -427,7 +429,7 @@ class LLMTRPGPlugin(Star):
                     return
                 pc = preset.to_player_character(
                     user_id=user_id,
-                    display_name=_sender_name(event),
+                    display_name=event_utils.sender_name(event),
                 )
                 session.players[user_id] = pc
                 add_player_to_turn_order(session, user_id)
@@ -439,7 +441,7 @@ class LLMTRPGPlugin(Star):
                     san=pc.san,
                 )
                 session.add_log(
-                    user=_sender_label(event),
+                    user=event_utils.sender_label(event),
                     command="trpg_join",
                     input_text=raw,
                     output_summary=output,
@@ -447,15 +449,15 @@ class LLMTRPGPlugin(Star):
                 await self.storage.save_session(session)
                 yield event.plain_result(output)
                 return
-            character_name, concept = _split_first(raw)
+            character_name, concept = event_utils.split_first(raw)
             if not character_name:
                 yield event.plain_result(presentation.message(session.language, "join_usage"))
                 return
 
-            user_id = _sender_id(event)
+            user_id = event_utils.sender_id(event)
             pc = PlayerCharacter(
                 user_id=user_id,
-                display_name=_sender_name(event),
+                display_name=event_utils.sender_name(event),
                 character_name=character_name,
                 concept=concept,
                 ruleset_id=session.ruleset_id,
@@ -470,7 +472,7 @@ class LLMTRPGPlugin(Star):
                 san=pc.san,
             )
             session.add_log(
-                user=_sender_label(event),
+                user=event_utils.sender_label(event),
                 command="trpg_join",
                 input_text=raw,
                 output_summary=output,
@@ -486,7 +488,7 @@ class LLMTRPGPlugin(Star):
         try:
             language = await self._command_language(event)
             raw = str(query or "").strip()
-            action, rest = _split_first(raw)
+            action, rest = event_utils.split_first(raw)
             action = action.lower()
             if action == "create":
                 output = await self._preset_create(event, language, rest)
@@ -518,7 +520,7 @@ class LLMTRPGPlugin(Star):
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
-            pc = session.players.get(_sender_id(event))
+            pc = session.players.get(event_utils.sender_id(event))
             if not pc:
                 yield event.plain_result(presentation.message(session.language, "not_joined"))
                 return
@@ -551,8 +553,8 @@ class LLMTRPGPlugin(Star):
                 return
 
             raw = str(query or "").strip()
-            action = _split_first(raw)[0].lower()
-            sender_id = _sender_id(event)
+            action = event_utils.split_first(raw)[0].lower()
+            sender_id = event_utils.sender_id(event)
 
             if not action:
                 yield event.plain_result(presentation.format_turn_order(session))
@@ -646,20 +648,26 @@ class LLMTRPGPlugin(Star):
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
-            if _sender_id(event) not in session.players:
+            if event_utils.sender_id(event) not in session.players:
                 yield event.plain_result(presentation.message(session.language, "member_required"))
                 return
             raw_action = str(action or "").strip()
             if not raw_action:
                 yield event.plain_result(presentation.message(session.language, "act_usage"))
                 return
-            if session.turn_count >= _safe_int(self.config.get("max_turns"), 200):
+            if session.turn_count >= event_utils.safe_int(
+                self.config.get("max_turns"), 200
+            ):
                 yield event.plain_result(presentation.message(session.language, "max_turns"))
                 return
 
-            sender_id = _sender_id(event)
+            sender_id = event_utils.sender_id(event)
             actor_pc = session.players.get(sender_id)
-            actor = actor_pc.character_name if actor_pc else _sender_name(event)
+            actor = (
+                actor_pc.character_name
+                if actor_pc
+                else event_utils.sender_name(event)
+            )
             if not can_submit_action(session, sender_id):
                 yield event.plain_result(
                     presentation.message(
@@ -793,7 +801,7 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_roll", desc="掷基础骰子表达式。")
     async def trpg_roll(self, event: AstrMessageEvent, expression: GreedyStr = ""):
         try:
-            session = await self.storage.load_session(_session_id(event))
+            session = await self.storage.load_session(event_utils.session_id(event))
             language = session.language if session and session.status == "running" else "zh"
             expr = str(expression or "").strip()
             try:
@@ -810,10 +818,12 @@ class LLMTRPGPlugin(Star):
                     raise RuntimeError("current AstrBot event does not support chain_result")
                 if session and session.status == "running":
                     session.add_log(
-                        user=_sender_label(event),
+                        user=event_utils.sender_label(event),
                         command="trpg_roll",
                         input_text=expr,
-                        output_summary=f"GIF {gif_path.name}; {_one_line(output, 160)}",
+                        output_summary=(
+                            f"GIF {gif_path.name}; {event_utils.one_line(output, 160)}"
+                        ),
                     )
                     await self.storage.save_session(session)
                 yield chain_result(MessageChain([Image.fromFileSystem(str(gif_path))]))
@@ -823,7 +833,7 @@ class LLMTRPGPlugin(Star):
 
             if session and session.status == "running":
                 session.add_log(
-                    user=_sender_label(event),
+                    user=event_utils.sender_label(event),
                     command="trpg_roll",
                     input_text=expr,
                     output_summary=output,
@@ -843,7 +853,7 @@ class LLMTRPGPlugin(Star):
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
-            if _sender_id(event) not in session.players:
+            if event_utils.sender_id(event) not in session.players:
                 yield event.plain_result(presentation.message(session.language, "member_required"))
                 return
             await self.storage.delete_session(session.session_id)
@@ -856,11 +866,11 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_export", desc="导出当前跑团 Markdown 日志。")
     async def trpg_export(self, event: AstrMessageEvent):
         try:
-            session = await self.storage.load_session(_session_id(event))
+            session = await self.storage.load_session(event_utils.session_id(event))
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
-            if _sender_id(event) not in session.players:
+            if event_utils.sender_id(event) not in session.players:
                 yield event.plain_result(presentation.message(session.language, "member_required"))
                 return
             path = export_session_markdown(session, self.data_dir)
@@ -871,7 +881,7 @@ class LLMTRPGPlugin(Star):
             yield event.plain_result("导出跑团日志失败，请稍后重试。")
 
     async def _running_session(self, event: AstrMessageEvent) -> GameSession | None:
-        session = await self.storage.load_session(_session_id(event))
+        session = await self.storage.load_session(event_utils.session_id(event))
         if not session or session.status != "running":
             return None
         if not session.language:
@@ -887,7 +897,7 @@ class LLMTRPGPlugin(Star):
         return session
 
     async def _command_language(self, event: AstrMessageEvent) -> str:
-        session = await self.storage.load_session(_session_id(event))
+        session = await self.storage.load_session(event_utils.session_id(event))
         if session and session.status == "running":
             return session.language or "zh"
         return "zh"
@@ -901,20 +911,24 @@ class LLMTRPGPlugin(Star):
         source_flags = script.feature_flags if script and normalized_mode == "custom" else {}
         flags = normalize_feature_flags(source_flags, play_mode=normalized_mode)
         if normalized_mode == "advanced":
-            flags["command_agent_enabled"] = _config_bool(
+            flags["command_agent_enabled"] = event_utils.config_bool(
                 self.config,
                 "command_agent_enabled",
                 True,
             )
             flags["turn_order_enabled"] = (
-                True if script else _config_bool(self.config, "turn_order_enabled", True)
+                True
+                if script
+                else event_utils.config_bool(
+                    self.config, "turn_order_enabled", True
+                )
             )
-            flags["state_patch_enabled"] = _config_bool(
+            flags["state_patch_enabled"] = event_utils.config_bool(
                 self.config,
                 "allow_state_patch",
                 True,
             )
-            flags["second_pass_resolution_enabled"] = _config_bool(
+            flags["second_pass_resolution_enabled"] = event_utils.config_bool(
                 self.config,
                 "second_pass_resolution",
                 True,
@@ -938,11 +952,17 @@ class LLMTRPGPlugin(Star):
         if mode != "advanced":
             return enabled
         if key == "command_agent_enabled":
-            return enabled and _config_bool(self.config, "command_agent_enabled", True)
+            return enabled and event_utils.config_bool(
+                self.config, "command_agent_enabled", True
+            )
         if key == "state_patch_enabled":
-            return enabled and _config_bool(self.config, "allow_state_patch", True)
+            return enabled and event_utils.config_bool(
+                self.config, "allow_state_patch", True
+            )
         if key == "second_pass_resolution_enabled":
-            return enabled and _config_bool(self.config, "second_pass_resolution", True)
+            return enabled and event_utils.config_bool(
+                self.config, "second_pass_resolution", True
+            )
         return enabled
 
     async def _command_agent_command_line(
@@ -951,11 +971,11 @@ class LLMTRPGPlugin(Star):
         session: GameSession,
         user_text: str,
     ) -> str:
-        sender_id = _sender_id(event)
+        sender_id = event_utils.sender_id(event)
         prompt = build_command_agent_prompt(
             session,
             sender_id=sender_id,
-            sender_name=_sender_name(event),
+            sender_name=event_utils.sender_name(event),
             user_text=user_text,
             allowed_commands=self._command_agent_allowed_commands(session, sender_id),
         )
@@ -1009,7 +1029,9 @@ class LLMTRPGPlugin(Star):
         sender_id: str,
         command_line: str,
     ) -> str:
-        command_token, rest = _split_first(str(command_line or "").strip())
+        command_token, rest = event_utils.split_first(
+            str(command_line or "").strip()
+        )
         command_name = (
             command_token[1:].lower()
             if command_token.startswith("/")
@@ -1018,7 +1040,7 @@ class LLMTRPGPlugin(Star):
         if not command_token.startswith("/trpg_"):
             return f"当前阶段不允许执行该 TRPG 命令：{command_token or command_line}"
         allowed_names = {
-            _split_first(command)[0][1:].lower()
+            event_utils.split_first(command)[0][1:].lower()
             for command in self._command_agent_allowed_commands(session, sender_id)
         }
         if command_name not in allowed_names:
@@ -1041,7 +1063,7 @@ class LLMTRPGPlugin(Star):
         event: AstrMessageEvent,
         raw_message: str,
     ):
-        command_token, rest = _split_first(raw_message)
+        command_token, rest = event_utils.split_first(raw_message)
         command_name = (
             command_token[1:].lower()
             if command_token.startswith("/")
@@ -1076,10 +1098,10 @@ class LLMTRPGPlugin(Star):
         language: str,
         raw: str,
     ) -> str:
-        name, concept = _split_first(str(raw or "").strip())
+        name, concept = event_utils.split_first(str(raw or "").strip())
         if not name or not concept:
             return presentation.message(language, "preset_usage")
-        user_id = _sender_id(event)
+        user_id = event_utils.sender_id(event)
         presets = await self.storage.load_presets(user_id)
         if name in presets:
             return presentation.message(language, "preset_exists", name=name)
@@ -1092,7 +1114,7 @@ class LLMTRPGPlugin(Star):
         return presentation.message(language, "preset_created", name=name)
 
     async def _preset_list(self, event: AstrMessageEvent, language: str) -> str:
-        presets = await self.storage.load_presets(_sender_id(event))
+        presets = await self.storage.load_presets(event_utils.sender_id(event))
         if not presets:
             return presentation.message(language, "preset_empty")
         items = "\n".join(
@@ -1111,7 +1133,7 @@ class LLMTRPGPlugin(Star):
         name = str(raw or "").strip()
         if not name:
             return presentation.message(language, "preset_usage")
-        presets = await self.storage.load_presets(_sender_id(event))
+        presets = await self.storage.load_presets(event_utils.sender_id(event))
         preset = presets.get(name)
         if preset is None:
             return presentation.message(language, "preset_not_found", name=name)
@@ -1123,11 +1145,11 @@ class LLMTRPGPlugin(Star):
         language: str,
         raw: str,
     ) -> str:
-        name, rest = _split_first(str(raw or "").strip())
-        field, value = _split_first(rest)
+        name, rest = event_utils.split_first(str(raw or "").strip())
+        field, value = event_utils.split_first(rest)
         if not name or not field or not value:
             return presentation.message(language, "preset_usage")
-        user_id = _sender_id(event)
+        user_id = event_utils.sender_id(event)
         presets = await self.storage.load_presets(user_id)
         preset = presets.get(name)
         if preset is None:
@@ -1346,13 +1368,16 @@ class LLMTRPGPlugin(Star):
         output: str,
     ) -> None:
         session.turn_count += 1
-        summary = f"{_sender_name(event)}: {action} -> {_one_line(output, 180)}"
+        summary = (
+            f"{event_utils.sender_name(event)}: {action} -> "
+            f"{event_utils.one_line(output, 180)}"
+        )
         session.recent_events.append(summary)
         session.add_log(
-            user=_sender_label(event),
+            user=event_utils.sender_label(event),
             command="trpg_act",
             input_text=action,
-            output_summary=_one_line(output, 200),
+            output_summary=event_utils.one_line(output, 200),
         )
 
     async def _trim_recent_events(
@@ -1360,8 +1385,12 @@ class LLMTRPGPlugin(Star):
         session: GameSession,
         event: AstrMessageEvent,
     ) -> None:
-        limit = max(1, _safe_int(self.config.get("max_recent_events"), 20))
-        timeline_limit = _safe_int(self.config.get("max_timeline_events"), 80)
+        limit = max(
+            1, event_utils.safe_int(self.config.get("max_recent_events"), 20)
+        )
+        timeline_limit = event_utils.safe_int(
+            self.config.get("max_timeline_events"), 80
+        )
         if not self._session_feature_enabled(session, "knowledge_enabled"):
             session.recent_events = session.recent_events[-limit:]
             return
@@ -1395,90 +1424,3 @@ class LLMTRPGPlugin(Star):
             "turn_out_of_order",
             current=player.character_name,
         )
-
-def _session_id(event: Any) -> str:
-    return str(
-        getattr(event, "unified_msg_origin", "")
-        or getattr(event, "session_id", "")
-        or "default"
-    )
-
-
-def _sender_id(event: Any) -> str:
-    getter = getattr(event, "get_sender_id", None)
-    if callable(getter):
-        value = getter()
-    else:
-        value = getattr(event, "sender_id", "")
-    return str(value or "unknown")
-
-
-def _sender_name(event: Any) -> str:
-    getter = getattr(event, "get_sender_name", None)
-    if callable(getter):
-        value = getter()
-    else:
-        value = getattr(event, "sender_name", "")
-    return str(value or _sender_id(event))
-
-
-def _sender_label(event: Any) -> str:
-    return f"{_sender_name(event)}({_sender_id(event)})"
-
-
-def _event_message_text(event: Any) -> str:
-    getter = getattr(event, "get_message_str", None)
-    if callable(getter):
-        value = getter()
-    else:
-        value = getattr(event, "message_str", "")
-    return str(value or "")
-
-
-def _block_default_llm(event: Any) -> None:
-    blocker = getattr(event, "should_call_llm", None)
-    if callable(blocker):
-        blocker(True)
-        return
-    setattr(event, "call_llm", True)
-
-
-def _stop_event(event: Any) -> None:
-    stopper = getattr(event, "stop_event", None)
-    if callable(stopper):
-        stopper()
-
-
-def _split_first(value: str) -> tuple[str, str]:
-    parts = value.split(maxsplit=1)
-    if not parts:
-        return "", ""
-    if len(parts) == 1:
-        return parts[0], ""
-    return parts[0], parts[1]
-
-
-def _split_start_mode(value: str) -> tuple[str, str]:
-    first, rest = _split_first(str(value or "").strip())
-    mode = normalize_play_mode(first, default="")
-    if mode:
-        return mode, rest.strip()
-    return "", str(value or "").strip()
-
-
-def _one_line(value: str, limit: int) -> str:
-    cleaned = " ".join(str(value or "").split())
-    return cleaned[:limit]
-
-
-def _safe_int(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _config_bool(config: AstrBotConfig | dict, key: str, default: bool) -> bool:
-    if key not in config:
-        return default
-    return scenario_io.coerce_bool(config.get(key))
