@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -14,10 +13,7 @@ try:
         MessageChain,
         Star,
         StarTools,
-        error_response,
-        file_response,
         filter,
-        json_response,
         logger,
         register,
         request,
@@ -32,10 +28,7 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         MessageChain,
         Star,
         StarTools,
-        error_response,
-        file_response,
         filter,
-        json_response,
         logger,
         register,
         request,
@@ -46,6 +39,7 @@ try:
     from . import preset_commands
     from . import presentation
     from . import scenario_io
+    from . import web_dashboard
     from .dice import roll_dice
     from .dice_gif import generate_dice_roll_gif
     from .export import export_session_markdown
@@ -98,6 +92,7 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
     import preset_commands
     import presentation
     import scenario_io
+    import web_dashboard
     from dice import roll_dice
     from dice_gif import generate_dice_roll_gif
     from export import export_session_markdown
@@ -176,7 +171,7 @@ class LLMTRPGPlugin(Star):
         self.config = config or {}
         self.data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME)).resolve()
         self.storage = SessionStorage(self, self.data_dir)
-        self._register_web_apis()
+        web_dashboard.register_web_apis(self.context, PLUGIN_NAME, self)
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def trpg_message_intercept(self, event: AstrMessageEvent):
@@ -1115,163 +1110,45 @@ class LLMTRPGPlugin(Star):
         await self.storage.save_presets(user_id, presets)
         return presentation.message(language, "preset_updated", name=name, change=change)
 
-    def _register_web_apis(self) -> None:
-        register_api = getattr(self.context, "register_web_api", None)
-        if not callable(register_api):
-            return
-        routes = [
-            (f"/{PLUGIN_NAME}/dashboard", self.web_dashboard, ["GET"], "TRPG dashboard"),
-            (
-                f"/{PLUGIN_NAME}/settings/save",
-                self.web_save_settings,
-                ["POST"],
-                "Save TRPG settings",
-            ),
-            (f"/{PLUGIN_NAME}/scripts", self.web_list_scripts, ["GET"], "List scripts"),
-            (
-                f"/{PLUGIN_NAME}/scripts/<script_id>",
-                self.web_get_script,
-                ["GET"],
-                "Get script",
-            ),
-            (
-                f"/{PLUGIN_NAME}/scripts/save",
-                self.web_save_script,
-                ["POST"],
-                "Save script",
-            ),
-            (
-                f"/{PLUGIN_NAME}/scripts/delete",
-                self.web_delete_script,
-                ["POST"],
-                "Delete script",
-            ),
-            (
-                f"/{PLUGIN_NAME}/scripts/import",
-                self.web_import_scripts,
-                ["POST"],
-                "Import scripts",
-            ),
-            (
-                f"/{PLUGIN_NAME}/scripts/export",
-                self.web_export_scripts,
-                ["GET"],
-                "Export scripts",
-            ),
-        ]
-        for route, handler, methods, desc in routes:
-            register_api(route, handler, methods, desc)
-
     async def web_dashboard(self):
-        scripts = await self.storage.load_scenario_scripts()
-        session_loader = getattr(self.storage, "load_saved_sessions", None)
-        sessions = await session_loader() if callable(session_loader) else []
-        return json_response(
-            {
-                "settings_schema": scenario_io.load_config_schema(),
-                "settings": dict(self.config),
-                "scripts": scenario_io.script_list_payload(scripts),
-                "knowledge_entries": scenario_io.knowledge_entries_payload(sessions),
-            }
-        )
+        return await web_dashboard.WebDashboardService(
+            self.storage, self.config, self.data_dir
+        ).dashboard()
 
     async def web_save_settings(self):
-        payload = await request.json(default={})
-        if not isinstance(payload, dict):
-            return error_response("settings payload must be an object", status_code=400)
-        try:
-            updates = scenario_io.coerce_config_updates(
-                scenario_io.load_config_schema(),
-                payload,
-            )
-        except ValueError as exc:
-            return error_response(str(exc), status_code=400)
-        self.config.update(updates)
-        saver = getattr(self.config, "save_config", None)
-        if callable(saver):
-            saver()
-        return json_response({"settings": dict(self.config)})
+        return await web_dashboard.WebDashboardService(
+            self.storage, self.config, self.data_dir
+        ).save_settings(request)
 
     async def web_list_scripts(self):
-        scripts = await self.storage.load_scenario_scripts()
-        return json_response({"scripts": scenario_io.script_list_payload(scripts)})
+        return await web_dashboard.WebDashboardService(
+            self.storage, self.config, self.data_dir
+        ).list_scripts()
 
     async def web_get_script(self, script_id: str):
-        scripts = await self.storage.load_scenario_scripts()
-        script = scripts.get(str(script_id))
-        if script is None:
-            return error_response("script not found", status_code=404)
-        return json_response({"script": script.to_dict()})
+        return await web_dashboard.WebDashboardService(
+            self.storage, self.config, self.data_dir
+        ).get_script(script_id)
 
     async def web_save_script(self):
-        payload = await request.json(default={})
-        if isinstance(payload, dict) and isinstance(payload.get("script"), dict):
-            payload = payload["script"]
-        if not isinstance(payload, dict):
-            return error_response("script payload must be an object", status_code=400)
-        scripts = await self.storage.load_scenario_scripts()
-        previous_created_at = payload.get("created_at")
-        script = ScenarioScript.from_dict(payload)
-        existing = scripts.get(script.script_id)
-        if existing and not previous_created_at:
-            script.created_at = existing.created_at
-        script.updated_at = scenario_io.current_timestamp()
-        scripts[script.script_id] = script
-        await self.storage.save_scenario_scripts(scripts)
-        return json_response({"script": script.to_dict()})
+        return await web_dashboard.WebDashboardService(
+            self.storage, self.config, self.data_dir
+        ).save_script(request)
 
     async def web_delete_script(self):
-        payload = await request.json(default={})
-        script_id = str(payload.get("script_id") or "").strip() if isinstance(payload, dict) else ""
-        if not script_id:
-            return error_response("script_id is required", status_code=400)
-        scripts = await self.storage.load_scenario_scripts()
-        if script_id not in scripts:
-            return error_response("script not found", status_code=404)
-        del scripts[script_id]
-        await self.storage.save_scenario_scripts(scripts)
-        return json_response({"deleted": script_id})
+        return await web_dashboard.WebDashboardService(
+            self.storage, self.config, self.data_dir
+        ).delete_script(request)
 
     async def web_import_scripts(self):
-        payload = await request.json(default={})
-        if not isinstance(payload, dict):
-            return error_response("import payload must be an object", status_code=400)
-        content = str(payload.get("content") or "")
-        filename = str(payload.get("filename") or "")
-        if not content.strip():
-            return error_response("content is required", status_code=400)
-        try:
-            imported = scenario_io.parse_scenario_import(content, filename=filename)
-        except ValueError as exc:
-            return error_response(str(exc), status_code=400)
-        scripts = await self.storage.load_scenario_scripts()
-        for script in imported:
-            existing = scripts.get(script.script_id)
-            if existing:
-                script.created_at = existing.created_at
-            script.updated_at = scenario_io.current_timestamp()
-            scripts[script.script_id] = script
-        await self.storage.save_scenario_scripts(scripts)
-        return json_response({"scripts": [script.to_dict() for script in imported]})
+        return await web_dashboard.WebDashboardService(
+            self.storage, self.config, self.data_dir
+        ).import_scripts(request)
 
     async def web_export_scripts(self):
-        scripts = await self.storage.load_scenario_scripts()
-        exports_dir = self.data_dir / "exports"
-        exports_dir.mkdir(parents=True, exist_ok=True)
-        path = exports_dir / "scenario_scripts.json"
-        with path.open("w", encoding="utf-8", newline="\n") as file:
-            json.dump(
-                [script.to_dict() for script in scripts.values()],
-                file,
-                ensure_ascii=False,
-                indent=2,
-            )
-            file.write("\n")
-        return file_response(
-            path,
-            filename="scenario_scripts.json",
-            content_type="application/json",
-        )
+        return await web_dashboard.WebDashboardService(
+            self.storage, self.config, self.data_dir
+        ).export_scripts()
 
     def _gm_system_prompt(self, session: GameSession | None = None) -> str:
         if session is not None and not self._session_feature_enabled(
