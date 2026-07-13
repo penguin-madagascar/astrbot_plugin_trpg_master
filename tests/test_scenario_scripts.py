@@ -221,6 +221,24 @@ def test_coerce_config_updates_accepts_schema_keys_and_basic_types():
     }
 
 
+def test_web_save_settings_returns_400_for_invalid_integer(monkeypatch):
+    class InvalidSettingsRequest:
+        async def json(self, default=None):
+            return {"max_turns": "many"}
+
+    plugin = LLMTRPGPlugin(context=object(), config={"max_turns": 200})
+    monkeypatch.setattr(main, "request", InvalidSettingsRequest())
+
+    response = asyncio.run(plugin.web_save_settings())
+
+    assert response == {
+        "status": "error",
+        "message": "max_turns must be an integer",
+        "status_code": 400,
+    }
+    assert plugin.config["max_turns"] == 200
+
+
 def test_plugin_registers_dashboard_web_api_routes():
     context = RegisteringContext()
 

@@ -1350,7 +1350,10 @@ class LLMTRPGPlugin(Star):
         payload = await request.json(default={})
         if not isinstance(payload, dict):
             return error_response("settings payload must be an object", status_code=400)
-        updates = _coerce_config_updates(_load_config_schema(), payload)
+        try:
+            updates = _coerce_config_updates(_load_config_schema(), payload)
+        except ValueError as exc:
+            return error_response(str(exc), status_code=400)
         self.config.update(updates)
         saver = getattr(self.config, "save_config", None)
         if callable(saver):
@@ -2120,7 +2123,10 @@ def _coerce_config_updates(
         if field_type in {"string", "text"}:
             updates[key] = str(value)
         elif field_type == "int":
-            updates[key] = int(value)
+            try:
+                updates[key] = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} must be an integer") from exc
         elif field_type == "bool":
             updates[key] = _coerce_bool(value)
         else:
