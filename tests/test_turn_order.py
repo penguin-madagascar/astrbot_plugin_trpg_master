@@ -5,6 +5,7 @@ from gm import parse_structured_patch
 from main import LLMTRPGPlugin
 from models import GameSession, PlayerCharacter, TurnOrderState
 from prompts import build_action_prompt
+from presentation import format_turn_order
 from scenario_io import coerce_config_updates, load_config_schema
 from turn_order import (
     add_player_to_turn_order,
@@ -144,8 +145,7 @@ def test_turn_order_state_dict_does_not_include_player_gm_fields():
 
 def test_status_and_action_prompt_do_not_include_player_gm_fields():
     session = make_session()
-    plugin = LLMTRPGPlugin(context=object())
-    status = plugin._format_turn_order(session)
+    status = format_turn_order(session)
     prompt = build_action_prompt(session, "Alice", "观察门口")
 
     assert "GM:" not in status

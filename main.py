@@ -87,6 +87,7 @@ except ModuleNotFoundError:  # pragma: no cover - local syntax checks outside As
 
 try:
     from . import preset_commands
+    from . import presentation
     from . import scenario_io
     from .dice import roll_dice
     from .dice_gif import generate_dice_roll_gif
@@ -121,7 +122,7 @@ try:
         build_resolution_prompt,
         build_summary_prompt,
     )
-    from .rules import get_ruleset, resolve_check_request
+    from .rules import resolve_check_request
     from .state import apply_state_patches
     from .storage import SessionStorage
     from .turn_order import (
@@ -137,6 +138,7 @@ try:
     )
 except ImportError:  # pragma: no cover - direct module loading outside package.
     import preset_commands
+    import presentation
     import scenario_io
     from dice import roll_dice
     from dice_gif import generate_dice_roll_gif
@@ -171,7 +173,7 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         build_resolution_prompt,
         build_summary_prompt,
     )
-    from rules import get_ruleset, resolve_check_request
+    from rules import resolve_check_request
     from state import apply_state_patches
     from storage import SessionStorage
     from turn_order import (
@@ -196,156 +198,6 @@ COMMAND_AGENT_SYSTEM_PROMPT = (
 )
 
 
-MESSAGES = {
-    "zh": {
-        "no_session": "当前会话没有进行中的跑团，请先使用 /trpg_start [主题]。",
-        "started_fallback": "跑团已启动，但 GM 开场生成失败。你们站在未知冒险的入口，危险正在靠近。",
-        "join_usage": "用法：/trpg_join 角色名 一句话设定",
-        "joined": "角色已加入：{name}（HP {hp} / SAN {san}）",
-        "not_joined": "你还没有加入当前跑团，请先使用 /trpg_join 角色名 一句话设定。",
-        "pc_title": "角色卡",
-        "preset_title": "角色预设",
-        "preset_usage": "用法：/trpg_preset create 名称 一句话设定 | list | show 名称 | update 名称 属性名称 新值",
-        "preset_created": "角色预设已创建：{name}",
-        "preset_exists": "角色预设已存在：{name}",
-        "preset_not_found": "未找到你的角色预设：{name}",
-        "preset_empty": "你还没有角色预设。",
-        "preset_list_title": "你的角色预设：",
-        "preset_updated": "角色预设已更新：{name}（{change}）",
-        "preset_ruleset_mismatch": "角色预设规则不匹配：{name} 是 {preset_ruleset}，当前跑团是 {session_ruleset}。",
-        "status_title": "跑团状态",
-        "act_usage": "用法：/trpg_act 行动内容",
-        "turn_usage": "用法：/trpg_turn [done|next]",
-        "turn_disabled": "当前跑团未启用行动顺序。",
-        "turn_title": "行动顺序",
-        "turn_none": "暂无建议行动者",
-        "turn_advanced": "行动顺序已推进。当前建议行动者：{current}",
-        "turn_denied_done": "只有当前行动者可以推进行动顺序。",
-        "turn_denied_action": "当前不是你的行动回合。当前建议行动者：{current}",
-        "turn_out_of_order": "行动顺序提示：当前建议行动者是 {current}。",
-        "turn_control_title": "行动顺序",
-        "memory_usage": "用法：/trpg_memory 关键词",
-        "memory_empty": "没有找到可见的战役记忆。",
-        "memory_title": "战役记忆",
-        "clues_empty": "当前没有可见线索。",
-        "clues_title": "可见线索",
-        "json_failed": "本回合未应用状态变更：GM 返回的 JSON 无法解析。",
-        "roll_failed": "骰子表达式错误：{error}",
-        "ended": "跑团已结束，当前会话数据已删除。",
-        "end_failed": "结束跑团失败，当前会话数据未删除。",
-        "exported": "跑团日志已导出：{path}",
-        "session_running": "当前会话已有进行中的跑团，请先使用 /trpg_end；如需保留记录，请先 /trpg_export。",
-        "start_cleanup_failed": "无法清理旧跑团数据，新跑团未启动。",
-        "member_required": "只有已加入当前跑团的玩家可以执行此操作。",
-        "max_turns": "当前跑团已达到最大回合数，请先 /trpg_end 或 /trpg_export。",
-        "gm_failed": "GM 生成失败，请稍后重试。",
-        "roll_title": "掷骰结果",
-        "dice_title": "判定结果",
-        "state_title": "状态变更",
-        "success": "成功",
-        "failure": "失败",
-    },
-    "en": {
-        "no_session": "No running TRPG session here. Use /trpg_start [theme] first.",
-        "started_fallback": "The session started, but the GM opening failed. You stand at the edge of an unknown adventure as danger draws near.",
-        "join_usage": "Usage: /trpg_join character_name one-line concept",
-        "joined": "Character joined: {name} (HP {hp} / SAN {san})",
-        "not_joined": "You have not joined this session. Use /trpg_join character_name one-line concept first.",
-        "pc_title": "Character Sheet",
-        "preset_title": "Character Preset",
-        "preset_usage": "Usage: /trpg_preset create name concept | list | show name | update name field value",
-        "preset_created": "Character preset created: {name}",
-        "preset_exists": "Character preset already exists: {name}",
-        "preset_not_found": "Character preset not found: {name}",
-        "preset_empty": "You do not have any character presets.",
-        "preset_list_title": "Your character presets:",
-        "preset_updated": "Character preset updated: {name} ({change})",
-        "preset_ruleset_mismatch": "Character preset ruleset mismatch: {name} is {preset_ruleset}, current session is {session_ruleset}.",
-        "status_title": "Session Status",
-        "act_usage": "Usage: /trpg_act action",
-        "turn_usage": "Usage: /trpg_turn [done|next]",
-        "turn_disabled": "Turn order is not enabled for this session.",
-        "turn_title": "Turn Order",
-        "turn_none": "No suggested actor",
-        "turn_advanced": "Turn order advanced. Current suggested actor: {current}",
-        "turn_denied_done": "Only the current actor can advance turn order.",
-        "turn_denied_action": "It is not your turn. Current suggested actor: {current}",
-        "turn_out_of_order": "Turn order note: the current suggested actor is {current}.",
-        "turn_control_title": "Turn Order",
-        "memory_usage": "Usage: /trpg_memory keyword",
-        "memory_empty": "No visible campaign memory found.",
-        "memory_title": "Campaign Memory",
-        "clues_empty": "No visible clues yet.",
-        "clues_title": "Visible Clues",
-        "json_failed": "No state changes were applied this turn: the GM JSON could not be parsed.",
-        "roll_failed": "Invalid dice expression: {error}",
-        "ended": "Session ended. The current session data was deleted.",
-        "end_failed": "The session could not be ended, and its data was not deleted.",
-        "exported": "Session log exported: {path}",
-        "session_running": "A TRPG session is already running here. Use /trpg_end first, and /trpg_export first if you need to keep a record.",
-        "start_cleanup_failed": "The previous session data could not be removed, so the new session was not started.",
-        "member_required": "Only players who joined this TRPG session may perform this operation.",
-        "max_turns": "This session reached the configured turn limit. Use /trpg_end or /trpg_export.",
-        "gm_failed": "GM generation failed. Please try again later.",
-        "roll_title": "Dice Result",
-        "dice_title": "Check Results",
-        "state_title": "State Changes",
-        "success": "success",
-        "failure": "failure",
-    },
-    "ja": {
-        "no_session": "現在進行中のセッションはありません。先に /trpg_start [テーマ] を使ってください。",
-        "started_fallback": "セッションは開始しましたが、GM の導入生成に失敗しました。未知の冒険の入口で、危険が近づいています。",
-        "join_usage": "使い方：/trpg_join キャラクター名 一言設定",
-        "joined": "キャラクターが参加しました：{name}（HP {hp} / SAN {san}）",
-        "not_joined": "まだこのセッションに参加していません。先に /trpg_join を使ってください。",
-        "pc_title": "キャラクターシート",
-        "preset_title": "キャラクタープリセット",
-        "status_title": "セッション状況",
-        "act_usage": "使い方：/trpg_act 行動内容",
-        "json_failed": "GM の JSON を解析できなかったため、このターンの状態変更は適用されませんでした。",
-        "roll_failed": "ダイス式エラー：{error}",
-        "ended": "セッションを終了し、現在のセッションデータを削除しました。",
-        "end_failed": "セッションを終了できず、データは削除されませんでした。",
-        "exported": "セッションログを書き出しました：{path}",
-        "session_running": "この会話ではすでにセッションが進行中です。先に /trpg_end を使用し、記録を残す場合はその前に /trpg_export を使用してください。",
-        "start_cleanup_failed": "以前のセッションデータを削除できなかったため、新しいセッションは開始されませんでした。",
-        "member_required": "このセッションに参加したプレイヤーだけがこの操作を実行できます。",
-        "max_turns": "このセッションは最大ターン数に達しました。/trpg_end または /trpg_export を使ってください。",
-        "gm_failed": "GM 生成に失敗しました。後でもう一度試してください。",
-        "roll_title": "ダイス結果",
-        "dice_title": "判定結果",
-        "state_title": "状態変更",
-        "success": "成功",
-        "failure": "失敗",
-    },
-    "ko": {
-        "no_session": "현재 진행 중인 세션이 없습니다. 먼저 /trpg_start [테마] 를 사용하세요.",
-        "started_fallback": "세션은 시작했지만 GM 도입 생성에 실패했습니다. 알 수 없는 모험의 입구에서 위험이 다가옵니다.",
-        "join_usage": "사용법: /trpg_join 캐릭터명 한 줄 설정",
-        "joined": "캐릭터가 참가했습니다: {name} (HP {hp} / SAN {san})",
-        "not_joined": "아직 이 세션에 참가하지 않았습니다. 먼저 /trpg_join 을 사용하세요.",
-        "pc_title": "캐릭터 시트",
-        "preset_title": "캐릭터 프리셋",
-        "status_title": "세션 상태",
-        "act_usage": "사용법: /trpg_act 행동 내용",
-        "json_failed": "GM JSON을 해석할 수 없어 이번 턴의 상태 변경은 적용되지 않았습니다.",
-        "roll_failed": "주사위 식 오류: {error}",
-        "ended": "세션을 종료하고 현재 세션 데이터를 삭제했습니다.",
-        "end_failed": "세션을 종료하지 못했으며 데이터는 삭제되지 않았습니다.",
-        "exported": "세션 로그를 내보냈습니다: {path}",
-        "session_running": "이 대화에는 이미 진행 중인 세션이 있습니다. 먼저 /trpg_end 를 사용하고, 기록이 필요하면 그 전에 /trpg_export 를 사용하세요.",
-        "start_cleanup_failed": "이전 세션 데이터를 삭제하지 못해 새 세션을 시작하지 않았습니다.",
-        "member_required": "현재 TRPG 세션에 참가한 플레이어만 이 작업을 실행할 수 있습니다.",
-        "max_turns": "이 세션은 최대 턴 수에 도달했습니다. /trpg_end 또는 /trpg_export 를 사용하세요.",
-        "gm_failed": "GM 생성에 실패했습니다. 잠시 후 다시 시도하세요.",
-        "roll_title": "주사위 결과",
-        "dice_title": "판정 결과",
-        "state_title": "상태 변경",
-        "success": "성공",
-        "failure": "실패",
-    },
-}
 
 
 @register(
@@ -442,7 +294,7 @@ class LLMTRPGPlugin(Star):
         try:
             session = await self.storage.load_session(_session_id(event))
             language = session.language if session and session.status == "running" else "zh"
-            yield event.plain_result(self._help_text(language))
+            yield event.plain_result(presentation.help_text(language))
         except Exception:
             logger.exception("TRPG help failed")
             yield event.plain_result("TRPG 帮助生成失败。")
@@ -452,7 +304,7 @@ class LLMTRPGPlugin(Star):
         session_id = _session_id(event)
         existing = await self.storage.load_session(session_id)
         if existing and existing.status == "running":
-            yield event.plain_result(_msg(existing.language, "session_running"))
+            yield event.plain_result(presentation.message(existing.language, "session_running"))
             return
         if existing:
             try:
@@ -460,7 +312,7 @@ class LLMTRPGPlugin(Star):
             except Exception:
                 logger.exception("TRPG legacy session cleanup failed")
                 yield event.plain_result(
-                    _msg(existing.language, "start_cleanup_failed")
+                    presentation.message(existing.language, "start_cleanup_failed")
                 )
                 return
 
@@ -525,7 +377,7 @@ class LLMTRPGPlugin(Star):
             )
         except Exception:
             logger.exception("TRPG opening generation failed")
-            opening = _msg(language, "started_fallback")
+            opening = presentation.message(language, "started_fallback")
 
         session.scene["description"] = _one_line(opening, 500)
         session.recent_events.append(f"Session started: {session_theme}")
@@ -543,28 +395,28 @@ class LLMTRPGPlugin(Star):
         try:
             session = await self._running_session(event)
             if not session:
-                yield event.plain_result(_msg("zh", "no_session"))
+                yield event.plain_result(presentation.message("zh", "no_session"))
                 return
             raw = str(query or "").strip()
             if not raw:
-                yield event.plain_result(_msg(session.language, "join_usage"))
+                yield event.plain_result(presentation.message(session.language, "join_usage"))
                 return
             if raw.lower().startswith("preset:"):
                 preset_name = raw[len("preset:") :].strip()
                 if not preset_name:
-                    yield event.plain_result(_msg(session.language, "join_usage"))
+                    yield event.plain_result(presentation.message(session.language, "join_usage"))
                     return
                 user_id = _sender_id(event)
                 presets = await self.storage.load_presets(user_id)
                 preset = presets.get(preset_name)
                 if preset is None:
                     yield event.plain_result(
-                        _msg(session.language, "preset_not_found", name=preset_name)
+                        presentation.message(session.language, "preset_not_found", name=preset_name)
                     )
                     return
                 if preset.ruleset_id != session.ruleset_id:
                     yield event.plain_result(
-                        _msg(
+                        presentation.message(
                             session.language,
                             "preset_ruleset_mismatch",
                             name=preset.name,
@@ -579,7 +431,7 @@ class LLMTRPGPlugin(Star):
                 )
                 session.players[user_id] = pc
                 add_player_to_turn_order(session, user_id)
-                output = _msg(
+                output = presentation.message(
                     session.language,
                     "joined",
                     name=pc.character_name,
@@ -597,7 +449,7 @@ class LLMTRPGPlugin(Star):
                 return
             character_name, concept = _split_first(raw)
             if not character_name:
-                yield event.plain_result(_msg(session.language, "join_usage"))
+                yield event.plain_result(presentation.message(session.language, "join_usage"))
                 return
 
             user_id = _sender_id(event)
@@ -610,7 +462,7 @@ class LLMTRPGPlugin(Star):
             )
             session.players[user_id] = pc
             add_player_to_turn_order(session, user_id)
-            output = _msg(
+            output = presentation.message(
                 session.language,
                 "joined",
                 name=pc.character_name,
@@ -652,7 +504,7 @@ class LLMTRPGPlugin(Star):
                 output = await self._preset_update(event, language, rest)
                 yield event.plain_result(output)
                 return
-            yield event.plain_result(_msg(language, "preset_usage"))
+            yield event.plain_result(presentation.message(language, "preset_usage"))
         except ValueError as exc:
             yield event.plain_result(str(exc))
         except Exception:
@@ -664,13 +516,13 @@ class LLMTRPGPlugin(Star):
         try:
             session = await self._running_session(event)
             if not session:
-                yield event.plain_result(_msg("zh", "no_session"))
+                yield event.plain_result(presentation.message("zh", "no_session"))
                 return
             pc = session.players.get(_sender_id(event))
             if not pc:
-                yield event.plain_result(_msg(session.language, "not_joined"))
+                yield event.plain_result(presentation.message(session.language, "not_joined"))
                 return
-            yield event.plain_result(self._format_pc(session.language, pc))
+            yield event.plain_result(presentation.format_pc(session.language, pc))
         except Exception:
             logger.exception("TRPG pc failed")
             yield event.plain_result("角色卡读取失败，请稍后重试。")
@@ -680,9 +532,9 @@ class LLMTRPGPlugin(Star):
         try:
             session = await self._running_session(event)
             if not session:
-                yield event.plain_result(_msg("zh", "no_session"))
+                yield event.plain_result(presentation.message("zh", "no_session"))
                 return
-            yield event.plain_result(self._format_status(session))
+            yield event.plain_result(presentation.format_status(session))
         except Exception:
             logger.exception("TRPG status failed")
             yield event.plain_result("跑团状态读取失败，请稍后重试。")
@@ -692,10 +544,10 @@ class LLMTRPGPlugin(Star):
         try:
             session = await self._running_session(event)
             if not session:
-                yield event.plain_result(_msg("zh", "no_session"))
+                yield event.plain_result(presentation.message("zh", "no_session"))
                 return
             if not session.turn_order.enabled:
-                yield event.plain_result(_msg(session.language, "turn_disabled"))
+                yield event.plain_result(presentation.message(session.language, "turn_disabled"))
                 return
 
             raw = str(query or "").strip()
@@ -703,7 +555,7 @@ class LLMTRPGPlugin(Star):
             sender_id = _sender_id(event)
 
             if not action:
-                yield event.plain_result(self._format_turn_order(session))
+                yield event.plain_result(presentation.format_turn_order(session))
                 return
             if action in {"next", "done"}:
                 if session.turn_order.mode == "llm_gm":
@@ -716,14 +568,14 @@ class LLMTRPGPlugin(Star):
                         yield item
                     return
                 if not can_finish_turn(session, sender_id):
-                    yield event.plain_result(_msg(session.language, "turn_denied_done"))
+                    yield event.plain_result(presentation.message(session.language, "turn_denied_done"))
                     return
                 advance_turn_order(session)
                 await self.storage.save_session(session)
-                yield event.plain_result(self._turn_advanced_message(session))
+                yield event.plain_result(presentation.turn_advanced_message(session))
                 return
 
-            yield event.plain_result(_msg(session.language, "turn_usage"))
+            yield event.plain_result(presentation.message(session.language, "turn_usage"))
         except Exception:
             logger.exception("TRPG turn command failed")
             yield event.plain_result("行动顺序操作失败，请稍后重试。")
@@ -733,7 +585,7 @@ class LLMTRPGPlugin(Star):
         try:
             session = await self._running_session(event)
             if not session:
-                yield event.plain_result(_msg("zh", "no_session"))
+                yield event.plain_result(presentation.message("zh", "no_session"))
                 return
             yield event.plain_result(format_campaign_recap(session, visibility="player"))
         except Exception:
@@ -745,11 +597,11 @@ class LLMTRPGPlugin(Star):
         try:
             session = await self._running_session(event)
             if not session:
-                yield event.plain_result(_msg("zh", "no_session"))
+                yield event.plain_result(presentation.message("zh", "no_session"))
                 return
             keyword = str(query or "").strip()
             if not keyword:
-                yield event.plain_result(_msg(session.language, "memory_usage"))
+                yield event.plain_result(presentation.message(session.language, "memory_usage"))
                 return
             results = search_campaign_memory(
                 session,
@@ -757,9 +609,9 @@ class LLMTRPGPlugin(Star):
                 visibility="player",
             )
             if not results:
-                yield event.plain_result(_msg(session.language, "memory_empty"))
+                yield event.plain_result(presentation.message(session.language, "memory_empty"))
                 return
-            output = f"{_msg(session.language, 'memory_title')}:\n" + "\n".join(
+            output = f"{presentation.message(session.language, 'memory_title')}:\n" + "\n".join(
                 f"- {item}" for item in results
             )
             yield event.plain_result(output)
@@ -772,13 +624,13 @@ class LLMTRPGPlugin(Star):
         try:
             session = await self._running_session(event)
             if not session:
-                yield event.plain_result(_msg("zh", "no_session"))
+                yield event.plain_result(presentation.message("zh", "no_session"))
                 return
             clues = player_visible_clues(session)
             if not clues:
-                yield event.plain_result(_msg(session.language, "clues_empty"))
+                yield event.plain_result(presentation.message(session.language, "clues_empty"))
                 return
-            output = f"{_msg(session.language, 'clues_title')}:\n" + "\n".join(
+            output = f"{presentation.message(session.language, 'clues_title')}:\n" + "\n".join(
                 f"- {clue.title} [{clue.clue_status}]: {clue.detail}"
                 for clue in clues
             )
@@ -792,17 +644,17 @@ class LLMTRPGPlugin(Star):
         try:
             session = await self._running_session(event)
             if not session:
-                yield event.plain_result(_msg("zh", "no_session"))
+                yield event.plain_result(presentation.message("zh", "no_session"))
                 return
             if _sender_id(event) not in session.players:
-                yield event.plain_result(_msg(session.language, "member_required"))
+                yield event.plain_result(presentation.message(session.language, "member_required"))
                 return
             raw_action = str(action or "").strip()
             if not raw_action:
-                yield event.plain_result(_msg(session.language, "act_usage"))
+                yield event.plain_result(presentation.message(session.language, "act_usage"))
                 return
             if session.turn_count >= _safe_int(self.config.get("max_turns"), 200):
-                yield event.plain_result(_msg(session.language, "max_turns"))
+                yield event.plain_result(presentation.message(session.language, "max_turns"))
                 return
 
             sender_id = _sender_id(event)
@@ -810,10 +662,10 @@ class LLMTRPGPlugin(Star):
             actor = actor_pc.character_name if actor_pc else _sender_name(event)
             if not can_submit_action(session, sender_id):
                 yield event.plain_result(
-                    _msg(
+                    presentation.message(
                         session.language,
                         "turn_denied_action",
-                        current=self._turn_current_label(session),
+                        current=presentation.turn_current_label(session),
                     )
                 )
                 return
@@ -831,7 +683,7 @@ class LLMTRPGPlugin(Star):
             )
 
             if not self._session_feature_enabled(session, "structured_patch_enabled"):
-                final = self._prepend_turn_warning(turn_warning, raw_reply.strip())
+                final = presentation.prepend_turn_warning(turn_warning, raw_reply.strip())
                 self._finish_turn(session, event, raw_action, final)
                 await self._trim_recent_events(session, event)
                 await self.storage.save_session(session)
@@ -846,9 +698,9 @@ class LLMTRPGPlugin(Star):
             except Exception:
                 logger.warning("TRPG GM JSON parse failed")
                 final = "\n\n".join(
-                    part for part in (raw_reply.strip(), _msg(session.language, "json_failed")) if part
+                    part for part in (raw_reply.strip(), presentation.message(session.language, "json_failed")) if part
                 )
-                final = self._prepend_turn_warning(turn_warning, final)
+                final = presentation.prepend_turn_warning(turn_warning, final)
                 if self._session_feature_enabled(session, "knowledge_enabled"):
                     record_turn_timeline_event(
                         session,
@@ -912,7 +764,7 @@ class LLMTRPGPlugin(Star):
                 except Exception:
                     logger.warning("TRPG second pass resolution failed")
 
-            final = self._compose_action_output(
+            final = presentation.compose_action_output(
                 session.language,
                 parsed.narrative,
                 dice_summary,
@@ -920,7 +772,7 @@ class LLMTRPGPlugin(Star):
                 turn_summary,
                 resolution,
             )
-            final = self._prepend_turn_warning(turn_warning, final)
+            final = presentation.prepend_turn_warning(turn_warning, final)
             if self._session_feature_enabled(session, "knowledge_enabled"):
                 record_turn_timeline_event(
                     session,
@@ -936,7 +788,7 @@ class LLMTRPGPlugin(Star):
             yield event.plain_result(final)
         except Exception:
             logger.exception("TRPG act failed")
-            yield event.plain_result(_msg("zh", "gm_failed"))
+            yield event.plain_result(presentation.message("zh", "gm_failed"))
 
     @filter.command("trpg_roll", desc="掷基础骰子表达式。")
     async def trpg_roll(self, event: AstrMessageEvent, expression: GreedyStr = ""):
@@ -947,10 +799,10 @@ class LLMTRPGPlugin(Star):
             try:
                 result = roll_dice(expr)
             except Exception as exc:
-                yield event.plain_result(_msg(language, "roll_failed", error=str(exc)))
+                yield event.plain_result(presentation.message(language, "roll_failed", error=str(exc)))
                 return
 
-            output = _format_roll_text(language, result)
+            output = presentation.format_roll_text(language, result)
             try:
                 gif_path = generate_dice_roll_gif(result, self.data_dir / "dice_gifs")
                 chain_result = getattr(event, "chain_result", None)
@@ -989,30 +841,30 @@ class LLMTRPGPlugin(Star):
         try:
             session = await self._running_session(event)
             if not session:
-                yield event.plain_result(_msg("zh", "no_session"))
+                yield event.plain_result(presentation.message("zh", "no_session"))
                 return
             if _sender_id(event) not in session.players:
-                yield event.plain_result(_msg(session.language, "member_required"))
+                yield event.plain_result(presentation.message(session.language, "member_required"))
                 return
             await self.storage.delete_session(session.session_id)
-            yield event.plain_result(_msg(session.language, "ended"))
+            yield event.plain_result(presentation.message(session.language, "ended"))
         except Exception:
             logger.exception("TRPG end failed")
             language = session.language if session else "zh"
-            yield event.plain_result(_msg(language, "end_failed"))
+            yield event.plain_result(presentation.message(language, "end_failed"))
 
     @filter.command("trpg_export", desc="导出当前跑团 Markdown 日志。")
     async def trpg_export(self, event: AstrMessageEvent):
         try:
             session = await self.storage.load_session(_session_id(event))
             if not session:
-                yield event.plain_result(_msg("zh", "no_session"))
+                yield event.plain_result(presentation.message("zh", "no_session"))
                 return
             if _sender_id(event) not in session.players:
-                yield event.plain_result(_msg(session.language, "member_required"))
+                yield event.plain_result(presentation.message(session.language, "member_required"))
                 return
             path = export_session_markdown(session, self.data_dir)
-            output = _msg(session.language, "exported", path=str(path))
+            output = presentation.message(session.language, "exported", path=str(path))
             yield event.plain_result(output)
         except Exception:
             logger.exception("TRPG export failed")
@@ -1226,29 +1078,29 @@ class LLMTRPGPlugin(Star):
     ) -> str:
         name, concept = _split_first(str(raw or "").strip())
         if not name or not concept:
-            return _msg(language, "preset_usage")
+            return presentation.message(language, "preset_usage")
         user_id = _sender_id(event)
         presets = await self.storage.load_presets(user_id)
         if name in presets:
-            return _msg(language, "preset_exists", name=name)
+            return presentation.message(language, "preset_exists", name=name)
         presets[name] = CharacterPreset(
             name=name,
             character_name=name,
             concept=concept,
         )
         await self.storage.save_presets(user_id, presets)
-        return _msg(language, "preset_created", name=name)
+        return presentation.message(language, "preset_created", name=name)
 
     async def _preset_list(self, event: AstrMessageEvent, language: str) -> str:
         presets = await self.storage.load_presets(_sender_id(event))
         if not presets:
-            return _msg(language, "preset_empty")
+            return presentation.message(language, "preset_empty")
         items = "\n".join(
             f"- {name}: {preset.character_name}, HP {preset.hp}, "
             f"SAN {preset.san}, {preset.concept}"
             for name, preset in sorted(presets.items())
         )
-        return f"{_msg(language, 'preset_list_title')}\n{items}"
+        return f"{presentation.message(language, 'preset_list_title')}\n{items}"
 
     async def _preset_show(
         self,
@@ -1258,11 +1110,11 @@ class LLMTRPGPlugin(Star):
     ) -> str:
         name = str(raw or "").strip()
         if not name:
-            return _msg(language, "preset_usage")
+            return presentation.message(language, "preset_usage")
         presets = await self.storage.load_presets(_sender_id(event))
         preset = presets.get(name)
         if preset is None:
-            return _msg(language, "preset_not_found", name=name)
+            return presentation.message(language, "preset_not_found", name=name)
         return preset_commands.format_preset(language, preset)
 
     async def _preset_update(
@@ -1274,16 +1126,16 @@ class LLMTRPGPlugin(Star):
         name, rest = _split_first(str(raw or "").strip())
         field, value = _split_first(rest)
         if not name or not field or not value:
-            return _msg(language, "preset_usage")
+            return presentation.message(language, "preset_usage")
         user_id = _sender_id(event)
         presets = await self.storage.load_presets(user_id)
         preset = presets.get(name)
         if preset is None:
-            return _msg(language, "preset_not_found", name=name)
+            return presentation.message(language, "preset_not_found", name=name)
         change = preset_commands.apply_preset_update(preset, field, value)
         presets[name] = preset
         await self.storage.save_presets(user_id, presets)
-        return _msg(language, "preset_updated", name=name, change=change)
+        return presentation.message(language, "preset_updated", name=name, change=change)
 
     def _register_web_apis(self) -> None:
         register_api = getattr(self.context, "register_web_api", None)
@@ -1486,26 +1338,6 @@ class LLMTRPGPlugin(Star):
             item for item in patch.get("memory_notes", []) if item
         )
 
-    def _compose_action_output(
-        self,
-        language: str,
-        narrative: str,
-        dice_summary: str,
-        state_summary: str,
-        turn_summary: str,
-        resolution: str,
-    ) -> str:
-        parts = [narrative.strip()]
-        if dice_summary:
-            parts.append(f"{_msg(language, 'dice_title')}\n{dice_summary}")
-        if state_summary:
-            parts.append(f"{_msg(language, 'state_title')}\n{state_summary}")
-        if turn_summary:
-            parts.append(f"{_msg(language, 'turn_control_title')}\n{turn_summary}")
-        if resolution:
-            parts.append(resolution.strip())
-        return "\n\n".join(part for part in parts if part)
-
     def _finish_turn(
         self,
         session: GameSession,
@@ -1550,19 +1382,6 @@ class LLMTRPGPlugin(Star):
         session.recent_events = session.recent_events[-limit:]
         compact_campaign_knowledge(session, max_timeline=timeline_limit)
 
-    def _turn_current_label(self, session: GameSession) -> str:
-        player = current_turn_player(session)
-        if player is None:
-            return _msg(session.language, "turn_none")
-        return player.character_name
-
-    def _turn_advanced_message(self, session: GameSession) -> str:
-        return _msg(
-            session.language,
-            "turn_advanced",
-            current=self._turn_current_label(session),
-        )
-
     def _turn_order_warning(self, session: GameSession, user_id: str) -> str:
         if session.turn_order.mode != "soft":
             return ""
@@ -1571,137 +1390,11 @@ class LLMTRPGPlugin(Star):
         player = current_turn_player(session)
         if player is None:
             return ""
-        return _msg(
+        return presentation.message(
             session.language,
             "turn_out_of_order",
             current=player.character_name,
         )
-
-    @staticmethod
-    def _prepend_turn_warning(warning: str, output: str) -> str:
-        return "\n\n".join(part for part in (warning, output) if part)
-
-    def _format_turn_order(self, session: GameSession) -> str:
-        order = session.turn_order
-        queue_lines = []
-        for index, user_id in enumerate(order.queue):
-            player = session.players.get(user_id)
-            if player is None:
-                continue
-            marker = "->" if index == order.current_index else "  "
-            queue_lines.append(f"{marker} {player.character_name} ({player.display_name})")
-        queue = "\n".join(queue_lines) or "- none"
-        paused = "yes" if order.paused else "no"
-        return (
-            f"{_msg(session.language, 'turn_title')}: {session.title}\n"
-            f"Mode: {order.mode}\n"
-            f"Phase: {order.phase}\n"
-            f"Round: {order.round_count}\n"
-            f"Paused: {paused}\n"
-            f"Current: {self._turn_current_label(session)}\n"
-            f"Queue:\n{queue}\n"
-            f"Control Note: {order.control_note or '-'}"
-        )
-
-    def _format_pc(self, language: str, pc: PlayerCharacter) -> str:
-        card = get_ruleset(pc.ruleset_id).format_character(pc)
-        return f"{_msg(language, 'pc_title')}: {pc.character_name}\n{card}"
-
-    def _format_status(self, session: GameSession) -> str:
-        players = "\n".join(
-            f"- {pc.character_name}: HP {pc.hp}, SAN {pc.san}, {pc.concept}"
-            for pc in session.players.values()
-        ) or "- none"
-        npcs = "\n".join(
-            f"- {npc.name}: {npc.role} {npc.status}".strip()
-            for npc in session.npcs.values()
-        ) or "- none"
-        threads = "\n".join(f"- {item}" for item in session.plot_threads) or "- none"
-        scene = session.scene.get("description") or session.scene.get("location") or "-"
-        turn_order = (
-            self._format_turn_order(session)
-            if session.turn_order.enabled
-            else _msg(session.language, "turn_disabled")
-        )
-        return (
-            f"{_msg(session.language, 'status_title')}: {session.title}\n"
-            f"Language: {session.language}\n"
-            f"Ruleset: {session.ruleset_id}\n"
-            f"Turn: {session.turn_count}\n"
-            f"Scene: {scene}\n"
-            f"Players:\n{players}\n"
-            f"NPCs:\n{npcs}\n"
-            f"Plot Threads:\n{threads}\n"
-            f"Rule Nodes:\n{_format_session_rule_nodes(session)}\n"
-            f"{turn_order}\n"
-            f"Summary: {session.history_summary or '-'}"
-        )
-
-    def _help_text(self, language: str) -> str:
-        if language == "en":
-            return (
-                "LLM TRPG commands:\n"
-                "/trpg_start [simple|advanced] [theme] - start a session\n"
-                "/trpg_join <name> <concept> - join as a PC\n"
-                "/trpg_join preset:<name> - join with your preset\n"
-                "/trpg_preset create <name> <concept> - create a preset\n"
-                "/trpg_preset list|show|update ... - manage your presets\n"
-                "/trpg_pc - show your character sheet\n"
-                "/trpg_status - show session state\n"
-                "/trpg_turn [done|next] - show or advance turn order\n"
-                "/trpg_recap - show player-visible campaign recap\n"
-                "/trpg_memory <keyword> - search campaign memory\n"
-                "/trpg_clues - show visible clues\n"
-                "/trpg_act <action> - take an action\n"
-                "/trpg_roll <expr> - roll dice as a GIF, e.g. 1d20+3\n"
-                "/trpg_end - end the session\n"
-                "/trpg_export - export Markdown log"
-            )
-        return (
-            "LLM TRPG 指令：\n"
-            "/trpg_start [简易|进阶] [主题或剧本名] - 启动跑团\n"
-            "/trpg_join <角色名> <一句话设定> - 加入并创建角色\n"
-            "/trpg_join preset:<名称> - 使用自己的角色预设加入\n"
-            "/trpg_preset create <名称> <一句话设定> - 创建角色预设\n"
-            "/trpg_preset list - 列出自己的角色预设\n"
-            "/trpg_preset show <名称> - 查看角色预设\n"
-            "/trpg_preset update <名称> <属性名称> <新值> - 微调一个字段\n"
-            "/trpg_pc - 查看自己的角色卡\n"
-            "/trpg_status - 查看当前跑团状态\n"
-            "/trpg_turn [done|next] - 查看或推进行动顺序\n"
-            "/trpg_recap - 查看玩家可见战役回顾\n"
-            "/trpg_memory <关键词> - 搜索玩家可见战役记忆\n"
-            "/trpg_clues - 查看玩家可见线索\n"
-            "/trpg_act <行动内容> - 执行行动并推进剧情\n"
-            "/trpg_roll <表达式> - 生成 GIF 掷骰，例如 1d20+3\n"
-            "/trpg_end - 结束当前跑团\n"
-            "/trpg_export - 导出 Markdown 日志"
-        )
-
-
-def _msg(language: str, key: str, **kwargs: Any) -> str:
-    table = MESSAGES.get(language, MESSAGES["zh"])
-    template = table.get(key, MESSAGES["zh"][key])
-    return template.format(**kwargs)
-
-
-def _format_roll_text(language: str, result: Any) -> str:
-    return (
-        f"{_msg(language, 'roll_title')}: {result.expression}\n"
-        f"rolls={result.rolls}, modifier={result.modifier}, total={result.total}"
-    )
-
-
-def _format_session_rule_nodes(session: GameSession) -> str:
-    scenario = session.scenario_script if isinstance(session.scenario_script, dict) else {}
-    nodes = [item for item in scenario.get("rule_nodes", []) if isinstance(item, dict)]
-    if not nodes:
-        return "- none"
-    return "\n".join(
-        f"- {str(node.get('title') or node.get('node_id') or 'untitled')}"
-        for node in nodes
-    )
-
 
 def _session_id(event: Any) -> str:
     return str(

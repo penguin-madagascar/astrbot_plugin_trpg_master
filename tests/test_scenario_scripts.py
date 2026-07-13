@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import main
+from presentation import format_status
 from main import LLMTRPGPlugin, PLUGIN_NAME
 from models import GameSession, ScenarioScript
 from scenario_io import coerce_config_updates, parse_scenario_import
@@ -448,9 +449,7 @@ def test_trpg_status_includes_ruleset_and_script_rule_nodes():
         ],
     )
     session.scenario_script = script.to_session_context()
-    plugin = LLMTRPGPlugin(context=object())
-
-    text = plugin._format_status(session)
+    text = format_status(session)
 
     assert "Ruleset: coc7_lite" in text
     assert "Rule Nodes:\n- 图书馆检定" in text
