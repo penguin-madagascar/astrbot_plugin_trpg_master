@@ -2,6 +2,7 @@ import asyncio
 
 from application import TRPGRuntime
 from models import GameSession
+from session_commands import SessionCommandService
 
 
 class FakeStorage:
@@ -34,3 +35,13 @@ def test_runtime_normalizes_loaded_running_session():
     assert loaded is session
     assert loaded.play_mode == "advanced"
     assert loaded.feature_flags
+
+
+def test_session_command_service_keeps_owner_dependencies_dynamic():
+    owner = FakeOwner(None)
+    service = SessionCommandService(owner, call_gm=lambda *args, **kwargs: None)
+
+    replacement = object()
+    owner.storage = replacement
+
+    assert service.storage is replacement

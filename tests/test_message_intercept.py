@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 import main
+import session_commands
 from main import LLMTRPGPlugin
 from models import GameSession, PlayerCharacter
 from scenario_io import coerce_config_updates, load_config_schema
@@ -215,7 +216,7 @@ class MessageInterceptTests(unittest.TestCase):
         with patch.object(main, "call_gm", fail_call_gm):
             act_outputs = asyncio.run(_collect(plugin.trpg_act(event, "闯入")))
         end_outputs = asyncio.run(_collect(plugin.trpg_end(event)))
-        with patch.object(main, "export_session_markdown", fail_export):
+        with patch.object(session_commands, "export_session_markdown", fail_export):
             export_outputs = asyncio.run(_collect(plugin.trpg_export(event)))
 
         expected = ["只有已加入当前跑团的玩家可以执行此操作。"]
