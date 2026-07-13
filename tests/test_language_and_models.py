@@ -1,11 +1,16 @@
 from language import detect_language_from_theme
 from models import CharacterPreset, GameSession, PlayerCharacter, ScenarioScript
-from presentation import message
+from presentation import help_text, message
 
 
 def test_presentation_uses_requested_language_and_chinese_fallback():
     assert message("en", "member_required").startswith("Only players")
     assert message("missing", "member_required") == "只有已加入当前跑团的玩家可以执行此操作。"
+
+
+def test_help_warns_that_ending_deletes_the_active_session():
+    assert "删除当前会话数据" in help_text("zh")
+    assert "export first" in help_text("en")
 
 
 def test_detect_language_from_theme_uses_chinese_for_empty_or_uncertain_text():

@@ -44,7 +44,7 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
 
 
 PLUGIN_NAME = "astrbot_plugin_trpg_master"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.1.1"
 PLUGIN_REPOSITORY = "https://github.com/penguin-madagascar/astrbot_plugin_trpg_master"
 PLUGIN_DESCRIPTION = "LLM 驱动的 TRPG/跑团插件，Python 负责骰子、规则判定、状态和日志。"
 

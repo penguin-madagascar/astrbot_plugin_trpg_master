@@ -4,7 +4,7 @@
 
 `astrbot_plugin_trpg_master` 是一个面向 AstrBot 的 LLM TRPG/跑团插件。插件由模型扮演 GM/KP 推动叙事，Python 代码负责骰子、关键判定、角色状态、战役记忆、日志导出和持久化，避免把随机结果和重要状态完全交给模型自由生成。
 
-当前版本：`0.1.0`
+当前版本：`0.1.1`
 
 ## 功能特性
 
@@ -35,6 +35,11 @@ Pillow>=10.0.0
 ```
 
 安装或更新后，在 AstrBot WebUI 的插件管理中启用或重载本插件。
+
+## 兼容性
+
+- AstrBot：`>=4.26,<5`。
+- 安装前请确认 AstrBot 版本满足 `metadata.yaml` 中的 `astrbot_version`；AstrBot 5.x 尚未列入当前兼容范围。
 
 ## 支持平台
 
@@ -70,7 +75,7 @@ Pillow>=10.0.0
 | 指令 | 说明 |
 | --- | --- |
 | `/trpg_help` | 显示帮助。 |
-| `/trpg_start [简易\|进阶] [主题或剧本名]` | 启动新的跑团；自由主题未指定模式时默认简易模式。 |
+| `/trpg_start [简易\|进阶] [主题或剧本名]` | 启动新的跑团；自由主题未指定模式时默认简易模式。当前会话已有进行中的跑团时会拒绝重复启动。 |
 | `/trpg_join <角色名> <一句话设定>` | 加入当前跑团并创建角色。 |
 | `/trpg_join preset:<名称>` | 使用自己的角色预设加入跑团。 |
 | `/trpg_preset create <名称> <一句话设定>` | 创建角色预设。 |
@@ -83,12 +88,19 @@ Pillow>=10.0.0
 | `/trpg_recap` | 查看玩家可见的战役回顾。 |
 | `/trpg_memory <关键词>` | 搜索玩家可见的战役记忆。 |
 | `/trpg_clues` | 查看玩家可见线索。 |
-| `/trpg_act <行动内容>` | 提交玩家行动并推进剧情。 |
+| `/trpg_act <行动内容>` | 已加入玩家提交行动并推进剧情。 |
 | `/trpg_roll <表达式>` | 掷基础骰子表达式，例如 `1d20+3`。 |
-| `/trpg_end` | 结束当前跑团。 |
-| `/trpg_export` | 导出当前跑团 Markdown 日志。 |
+| `/trpg_end` | 已加入玩家结束跑团，并立即删除当前会话的跑团记录。 |
+| `/trpg_export` | 已加入玩家导出当前跑团 Markdown 日志。 |
 
 如果 `command_agent_enabled` 开启，跑团进行中玩家也可以直接发送自然语言，插件会尝试转换为当前阶段允许的 `/trpg_*` 命令。普通非 TRPG 斜杠命令不会被本插件拦截。
+
+## 会话边界与权限
+
+- 跑团不设置额外的“团主”角色，会话成员以是否执行过 `/trpg_join` 为准。
+- `/trpg_act`、`/trpg_end` 和 `/trpg_export` 仅允许已加入当前跑团的玩家执行。
+- 同一会话已有进行中的跑团时，`/trpg_start` 不会覆盖或重启它。
+- `/trpg_end` 是不可逆操作：成功后当前会话记录会被删除。如需保留过程，必须先执行 `/trpg_export`。角色预设、剧本、已导出日志和已生成的 GIF 不会因结束会话而删除。
 
 ## 规则系统
 
@@ -134,7 +146,7 @@ GM JSON 中的 `dice_requests` 会由当前规则系统解析，模型不能直�
 
 ## 数据存储
 
-插件通过 `StarTools.get_data_dir("astrbot_plugin_trpg_master")` 获取 AstrBot 插件数据目录，并优先使用 AstrBot KV；同时保留本地 JSON 文件作为兜底。会话、角色预设、剧本、掷骰 GIF 和导出日志都存储在插件数据目录下。
+插件通过 `StarTools.get_data_dir("astrbot_plugin_trpg_master")` 获取 AstrBot 插件数据目录。本地 JSON 是会话、角色预设和剧本的权威数据源；写入成功后会同步镜像到 AstrBot KV。当本地 JSON 缺失而 KV 存在数据时，插件会用 KV 恢复本地文件。掷骰 GIF 和导出日志也保存在插件数据目录下。
 
 不要把运行时生成的 `data/`、`exports/`、`.venv/`、`__pycache__/` 或 `.pytest_cache/` 提交到插件仓库。它们已在 `.gitignore` 或 `.gitattributes` 中排除。
 
@@ -149,8 +161,12 @@ GM JSON 中的 `dice_requests` 会由当前规则系统解析，模型不能直�
 如果需要新建本地开发环境，安装测试依赖：
 
 ```bash
-python3 -m pip install -r requirements-dev.txt
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
 ```
+
+`requirements-dev.txt` 会同时安装运行时依赖和测试依赖，避免本地测试环境缺少 `Pillow`。
 
 发布前建议检查：
 
@@ -161,7 +177,7 @@ git status --short
 
 ## 发布说明
 
-- 插件元数据位于 `metadata.yaml`，当前版本为 `0.1.0`。
+- 插件元数据位于 `metadata.yaml`，当前版本为 `0.1.1`。
 - AstrBot 插件市场使用 GitHub 托管插件，发布前仓库需要保持 public。
 - AstrBot 插件市场限制插件 zip 包大小不超过 16MB。
 - 本仓库已提供 1:1 比例、256x256 尺寸的 `logo.png`，可作为 AstrBot 插件 Logo。

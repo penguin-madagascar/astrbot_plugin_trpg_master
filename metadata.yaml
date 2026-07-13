@@ -3,7 +3,8 @@ display_name: LLM TRPG 跑团
 desc: LLM 驱动的 TRPG/跑团插件，由模型扮演 GM/KP，Python 负责骰子、判定、状态、日志和持久化。
 short_desc: LLM GM/KP 跑团插件。
 author: jiangxingda
-version: 0.1.0
+version: 0.1.1
+astrbot_version: ">=4.26,<5"
 repo: https://github.com/penguin-madagascar/astrbot_plugin_trpg_master
 support_platforms:
   - aiocqhttp

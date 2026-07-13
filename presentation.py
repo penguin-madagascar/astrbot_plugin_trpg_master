@@ -303,7 +303,7 @@ def help_text(language: str) -> str:
             "/trpg_clues - show visible clues\n"
             "/trpg_act <action> - take an action\n"
             "/trpg_roll <expr> - roll dice as a GIF, e.g. 1d20+3\n"
-            "/trpg_end - end the session\n"
+            "/trpg_end - delete the active session; export first to keep a record\n"
             "/trpg_export - export Markdown log"
         )
     return (
@@ -323,6 +323,6 @@ def help_text(language: str) -> str:
         "/trpg_clues - 查看玩家可见线索\n"
         "/trpg_act <行动内容> - 执行行动并推进剧情\n"
         "/trpg_roll <表达式> - 生成 GIF 掷骰，例如 1d20+3\n"
-        "/trpg_end - 结束当前跑团\n"
+        "/trpg_end - 结束跑团并删除当前会话数据，需保留记录时请先导出\n"
         "/trpg_export - 导出 Markdown 日志"
     )
