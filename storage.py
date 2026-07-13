@@ -19,8 +19,8 @@ except ImportError:  # pragma: no cover - direct import outside package.
 
 
 class SessionStorage:
-    def __init__(self, context: Any, data_dir: Path) -> None:
-        self.context = context
+    def __init__(self, kv_store: Any, data_dir: Path) -> None:
+        self.kv_store = kv_store
         self.data_dir = Path(data_dir)
         self.sessions_dir = self.data_dir / "sessions"
         self.presets_dir = self.data_dir / "presets"
@@ -28,23 +28,22 @@ class SessionStorage:
         self.presets_dir.mkdir(parents=True, exist_ok=True)
 
     async def load_session(self, session_id: str) -> GameSession | None:
-        key = self._key(session_id)
-        data = await self._kv_get(key)
+        data = self._file_get(session_id)
         if data is None:
-            data = self._file_get(session_id)
+            data = await self._kv_get(self._key(session_id))
         if data is None:
             return None
         if isinstance(data, str):
             data = json.loads(data)
+        if not self._file_path(session_id).exists():
+            self._file_put(session_id, data)
         return GameSession.from_dict(data)
 
     async def save_session(self, session: GameSession) -> None:
         key = self._key(session.session_id)
         data = session.to_dict()
-        if not await self._kv_put(key, data):
-            self._file_put(session.session_id, data)
-            return
         self._file_put(session.session_id, data)
+        await self._kv_put(key, data)
 
     async def load_saved_sessions(self) -> list[GameSession]:
         sessions = []
@@ -54,20 +53,21 @@ class SessionStorage:
         return sessions
 
     async def delete_session(self, session_id: str) -> None:
-        await self._kv_put(self._key(session_id), None)
+        await self._kv_delete(self._key(session_id))
         path = self._file_path(session_id)
         if path.exists():
             path.unlink()
 
     async def load_presets(self, owner_id: str) -> dict[str, CharacterPreset]:
-        key = self._preset_key(owner_id)
-        data = await self._kv_get(key)
+        data = self._preset_file_get(owner_id)
         if data is None:
-            data = self._preset_file_get(owner_id)
+            data = await self._kv_get(self._preset_key(owner_id))
         if data is None:
             return {}
         if isinstance(data, str):
             data = json.loads(data)
+        if not self._preset_file_path(owner_id).exists():
+            self._preset_file_put(owner_id, data)
         return {
             str(name): CharacterPreset.from_dict(preset)
             for name, preset in data.items()
@@ -80,19 +80,19 @@ class SessionStorage:
     ) -> None:
         key = self._preset_key(owner_id)
         data = {name: preset.to_dict() for name, preset in presets.items()}
-        if not await self._kv_put(key, data):
-            self._preset_file_put(owner_id, data)
-            return
         self._preset_file_put(owner_id, data)
+        await self._kv_put(key, data)
 
     async def load_scenario_scripts(self) -> dict[str, ScenarioScript]:
-        data = await self._kv_get(self._scenario_scripts_key())
+        data = self._scenario_scripts_file_get()
         if data is None:
-            data = self._scenario_scripts_file_get()
+            data = await self._kv_get(self._scenario_scripts_key())
         if data is None:
             return {}
         if isinstance(data, str):
             data = json.loads(data)
+        if not self._scenario_scripts_file_path().exists():
+            self._scenario_scripts_file_put(data)
         return {
             str(script_id): ScenarioScript.from_dict(script)
             for script_id, script in data.items()
@@ -103,10 +103,8 @@ class SessionStorage:
         scripts: dict[str, ScenarioScript],
     ) -> None:
         data = {script_id: script.to_dict() for script_id, script in scripts.items()}
-        if not await self._kv_put(self._scenario_scripts_key(), data):
-            self._scenario_scripts_file_put(data)
-            return
         self._scenario_scripts_file_put(data)
+        await self._kv_put(self._scenario_scripts_key(), data)
 
     async def find_scenario_script(self, query: str) -> ScenarioScript | None:
         target = str(query or "").strip()
@@ -121,33 +119,30 @@ class SessionStorage:
         return None
 
     async def _kv_get(self, key: str) -> Any | None:
-        getter = getattr(self.context, "get_kv_data", None)
+        getter = getattr(self.kv_store, "get_kv_data", None)
         if not callable(getter):
             return None
-        for args in ((key,), ("astrbot_plugin_trpg_master", key)):
-            try:
-                return await _maybe_await(getter(*args))
-            except TypeError:
-                continue
-            except Exception as exc:
-                logger.debug("TRPG KV load failed: %s", exc)
-                return None
-        return None
+        try:
+            return await _maybe_await(getter(key, None))
+        except Exception as exc:
+            logger.debug("TRPG KV load failed: %s", exc)
+            return None
 
     async def _kv_put(self, key: str, data: Any) -> bool:
-        putter = getattr(self.context, "put_kv_data", None)
+        putter = getattr(self.kv_store, "put_kv_data", None)
         if not callable(putter):
             return False
-        for args in ((key, data), ("astrbot_plugin_trpg_master", key, data)):
-            try:
-                await _maybe_await(putter(*args))
-                return True
-            except TypeError:
-                continue
-            except Exception as exc:
-                logger.debug("TRPG KV save failed: %s", exc)
-                return False
-        return False
+        try:
+            await _maybe_await(putter(key, data))
+            return True
+        except Exception as exc:
+            logger.debug("TRPG KV save failed: %s", exc)
+            return False
+
+    async def _kv_delete(self, key: str) -> None:
+        deleter = getattr(self.kv_store, "delete_kv_data", None)
+        if callable(deleter):
+            await _maybe_await(deleter(key))
 
     def _file_get(self, session_id: str) -> dict[str, Any] | None:
         path = self._file_path(session_id)

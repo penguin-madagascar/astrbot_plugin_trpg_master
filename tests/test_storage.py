@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import pytest
+
 from models import CharacterPreset, GameSession, ScenarioScript
 from storage import SessionStorage
 
@@ -14,11 +16,19 @@ class KVContext:
     def __init__(self) -> None:
         self.data = {}
 
-    async def get_kv_data(self, key):
-        return self.data.get(key)
+    async def get_kv_data(self, key, default):
+        return self.data.get(key, default)
 
     async def put_kv_data(self, key, value):
         self.data[key] = value
+
+    async def delete_kv_data(self, key):
+        self.data.pop(key, None)
+
+
+class FailingDeleteKVContext(KVContext):
+    async def delete_kv_data(self, key):
+        raise RuntimeError("kv delete failed")
 
 
 def test_storage_saves_and_loads_presets_via_file_fallback():
@@ -95,6 +105,87 @@ def test_storage_lists_saved_session_file_cache():
         sessions = asyncio.run(storage.load_saved_sessions())
 
         assert [item.session_id for item in sessions] == ["session-1"]
+
+
+def test_storage_prefers_local_session_over_stale_kv():
+    with TemporaryDirectory() as tmp:
+        context = KVContext()
+        storage = SessionStorage(context, Path(tmp))
+        local_session = GameSession.new(
+            session_id="session-1",
+            title="本地新团",
+            theme="本地主题",
+            language="zh",
+        )
+        stale_session = GameSession.new(
+            session_id="session-1",
+            title="KV 旧团",
+            theme="旧主题",
+            language="zh",
+        )
+
+        asyncio.run(storage.save_session(local_session))
+        context.data[storage._key("session-1")] = stale_session.to_dict()
+
+        loaded = asyncio.run(storage.load_session("session-1"))
+
+        assert loaded is not None
+        assert loaded.title == "本地新团"
+
+
+def test_storage_restores_missing_local_session_from_kv():
+    with TemporaryDirectory() as tmp:
+        context = KVContext()
+        storage = SessionStorage(context, Path(tmp))
+        session = GameSession.new(
+            session_id="session-1",
+            title="KV 团",
+            theme="恢复测试",
+            language="zh",
+        )
+        context.data[storage._key("session-1")] = session.to_dict()
+
+        loaded = asyncio.run(storage.load_session("session-1"))
+
+        assert loaded is not None
+        assert loaded.title == "KV 团"
+        assert storage._file_path("session-1").exists()
+
+
+def test_storage_deletes_kv_before_local_session_file():
+    with TemporaryDirectory() as tmp:
+        context = KVContext()
+        storage = SessionStorage(context, Path(tmp))
+        session = GameSession.new(
+            session_id="session-1",
+            title="待删除团",
+            theme="删除测试",
+            language="zh",
+        )
+        asyncio.run(storage.save_session(session))
+
+        asyncio.run(storage.delete_session("session-1"))
+
+        assert storage._key("session-1") not in context.data
+        assert not storage._file_path("session-1").exists()
+
+
+def test_storage_keeps_local_session_when_kv_delete_fails():
+    with TemporaryDirectory() as tmp:
+        context = FailingDeleteKVContext()
+        storage = SessionStorage(context, Path(tmp))
+        session = GameSession.new(
+            session_id="session-1",
+            title="保留团",
+            theme="失败测试",
+            language="zh",
+        )
+        asyncio.run(storage.save_session(session))
+
+        with pytest.raises(RuntimeError, match="kv delete failed"):
+            asyncio.run(storage.delete_session("session-1"))
+
+        assert storage._file_path("session-1").exists()
 
 
 def test_storage_finds_scenario_script_by_id_or_title():
