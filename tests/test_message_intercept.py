@@ -173,10 +173,110 @@ class MessageInterceptTests(unittest.TestCase):
         with patch.object(main, "call_command_agent", fail_agent):
             followup_outputs = asyncio.run(_collect(plugin.trpg_message_intercept(followup)))
 
-        self.assertEqual(end_outputs, ["跑团已结束，日志已保留。"])
+        self.assertEqual(end_outputs, ["跑团已结束，当前会话数据已删除。"])
+        self.assertIsNone(plugin.storage.session)
         self.assertEqual(followup_outputs, [])
         self.assertFalse(followup.llm_blocked)
         self.assertFalse(followup.stopped)
+
+    def test_running_session_cannot_be_restarted(self):
+        async def fail_call_gm(context, event, *, prompt, system_prompt):
+            raise AssertionError("running session restart must not call the GM")
+
+        session = make_session()
+        session.turn_count = 12
+        plugin = LLMTRPGPlugin(context=object())
+        plugin.storage = FakeStorage(session)
+        event = FakeEvent(user_id="u2", sender_name="Morgan", message="/trpg_start")
+
+        with patch.object(main, "call_gm", fail_call_gm):
+            outputs = asyncio.run(_collect(plugin.trpg_start(event, "")))
+
+        self.assertEqual(
+            outputs,
+            ["当前会话已有进行中的跑团，请先使用 /trpg_end；如需保留记录，请先 /trpg_export。"],
+        )
+        self.assertIs(plugin.storage.session, session)
+        self.assertEqual(plugin.storage.session.turn_count, 12)
+
+    def test_non_member_cannot_act_end_or_export(self):
+        async def fail_call_gm(context, event, *, prompt, system_prompt):
+            raise AssertionError("non-member action must not call the GM")
+
+        def fail_export(*args, **kwargs):
+            raise AssertionError("non-member export must not write a file")
+
+        session = make_session()
+        plugin = LLMTRPGPlugin(context=object())
+        plugin.storage = FakeStorage(session)
+        event = FakeEvent(user_id="u2", sender_name="Morgan", message="")
+
+        with patch.object(main, "call_gm", fail_call_gm):
+            act_outputs = asyncio.run(_collect(plugin.trpg_act(event, "闯入")))
+        end_outputs = asyncio.run(_collect(plugin.trpg_end(event)))
+        with patch.object(main, "export_session_markdown", fail_export):
+            export_outputs = asyncio.run(_collect(plugin.trpg_export(event)))
+
+        expected = ["只有已加入当前跑团的玩家可以执行此操作。"]
+        self.assertEqual(act_outputs, expected)
+        self.assertEqual(end_outputs, expected)
+        self.assertEqual(export_outputs, expected)
+        self.assertIs(plugin.storage.session, session)
+        self.assertEqual(session.turn_count, 0)
+
+    def test_new_session_clears_legacy_ended_session(self):
+        async def fake_call_gm(context, event, *, prompt, system_prompt):
+            return "新团开场"
+
+        session = make_session()
+        session.status = "ended"
+        plugin = LLMTRPGPlugin(context=object(), config={"default_theme": "新主题"})
+        plugin.storage = FakeStorage(session)
+        event = FakeEvent(user_id="u2", sender_name="Morgan", message="/trpg_start")
+
+        with patch.object(main, "call_gm", fake_call_gm):
+            outputs = asyncio.run(_collect(plugin.trpg_start(event, "")))
+
+        self.assertEqual(outputs, ["新团开场"])
+        self.assertEqual(plugin.storage.deleted_session_ids, ["session-1"])
+        self.assertIsNotNone(plugin.storage.session)
+        self.assertEqual(plugin.storage.session.title, "新主题")
+        self.assertEqual(plugin.storage.session.status, "running")
+
+    def test_end_failure_keeps_running_session(self):
+        session = make_session()
+        plugin = LLMTRPGPlugin(context=object())
+        plugin.storage = FakeStorage(
+            session,
+            delete_error=RuntimeError("delete failed"),
+        )
+        event = FakeEvent(user_id="u1", sender_name="Dana", message="/trpg_end")
+
+        outputs = asyncio.run(_collect(plugin.trpg_end(event)))
+
+        self.assertEqual(outputs, ["结束跑团失败，当前会话数据未删除。"])
+        self.assertIs(plugin.storage.session, session)
+        self.assertEqual(session.status, "running")
+
+    def test_legacy_session_delete_failure_blocks_new_session(self):
+        async def fail_call_gm(context, event, *, prompt, system_prompt):
+            raise AssertionError("failed legacy cleanup must not call the GM")
+
+        session = make_session()
+        session.status = "ended"
+        plugin = LLMTRPGPlugin(context=object())
+        plugin.storage = FakeStorage(
+            session,
+            delete_error=RuntimeError("delete failed"),
+        )
+        event = FakeEvent(user_id="u2", sender_name="Morgan", message="/trpg_start")
+
+        with patch.object(main, "call_gm", fail_call_gm):
+            outputs = asyncio.run(_collect(plugin.trpg_start(event, "")))
+
+        self.assertEqual(outputs, ["无法清理旧跑团数据，新跑团未启动。"])
+        self.assertIs(plugin.storage.session, session)
+        self.assertEqual(session.status, "ended")
 
     def test_agent_invalid_outputs_error_and_stop(self):
         session = make_session()
@@ -502,8 +602,15 @@ class FakeEvent:
 
 
 class FakeStorage:
-    def __init__(self, session: GameSession | None = None) -> None:
+    def __init__(
+        self,
+        session: GameSession | None = None,
+        *,
+        delete_error: Exception | None = None,
+    ) -> None:
         self.session = session
+        self.deleted_session_ids = []
+        self.delete_error = delete_error
 
     async def load_scenario_scripts(self):
         return {}
@@ -513,6 +620,12 @@ class FakeStorage:
 
     async def save_session(self, session: GameSession) -> None:
         self.session = session
+
+    async def delete_session(self, session_id: str) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
+        self.deleted_session_ids.append(session_id)
+        self.session = None
 
 
 async def _collect(generator):

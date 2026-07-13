@@ -232,8 +232,12 @@ MESSAGES = {
         "clues_title": "可见线索",
         "json_failed": "本回合未应用状态变更：GM 返回的 JSON 无法解析。",
         "roll_failed": "骰子表达式错误：{error}",
-        "ended": "跑团已结束，日志已保留。",
+        "ended": "跑团已结束，当前会话数据已删除。",
+        "end_failed": "结束跑团失败，当前会话数据未删除。",
         "exported": "跑团日志已导出：{path}",
+        "session_running": "当前会话已有进行中的跑团，请先使用 /trpg_end；如需保留记录，请先 /trpg_export。",
+        "start_cleanup_failed": "无法清理旧跑团数据，新跑团未启动。",
+        "member_required": "只有已加入当前跑团的玩家可以执行此操作。",
         "max_turns": "当前跑团已达到最大回合数，请先 /trpg_end 或 /trpg_export。",
         "gm_failed": "GM 生成失败，请稍后重试。",
         "roll_title": "掷骰结果",
@@ -276,8 +280,12 @@ MESSAGES = {
         "clues_title": "Visible Clues",
         "json_failed": "No state changes were applied this turn: the GM JSON could not be parsed.",
         "roll_failed": "Invalid dice expression: {error}",
-        "ended": "Session ended. Logs were kept.",
+        "ended": "Session ended. The current session data was deleted.",
+        "end_failed": "The session could not be ended, and its data was not deleted.",
         "exported": "Session log exported: {path}",
+        "session_running": "A TRPG session is already running here. Use /trpg_end first, and /trpg_export first if you need to keep a record.",
+        "start_cleanup_failed": "The previous session data could not be removed, so the new session was not started.",
+        "member_required": "Only players who joined this TRPG session may perform this operation.",
         "max_turns": "This session reached the configured turn limit. Use /trpg_end or /trpg_export.",
         "gm_failed": "GM generation failed. Please try again later.",
         "roll_title": "Dice Result",
@@ -298,8 +306,12 @@ MESSAGES = {
         "act_usage": "使い方：/trpg_act 行動内容",
         "json_failed": "GM の JSON を解析できなかったため、このターンの状態変更は適用されませんでした。",
         "roll_failed": "ダイス式エラー：{error}",
-        "ended": "セッションを終了しました。ログは保存されています。",
+        "ended": "セッションを終了し、現在のセッションデータを削除しました。",
+        "end_failed": "セッションを終了できず、データは削除されませんでした。",
         "exported": "セッションログを書き出しました：{path}",
+        "session_running": "この会話ではすでにセッションが進行中です。先に /trpg_end を使用し、記録を残す場合はその前に /trpg_export を使用してください。",
+        "start_cleanup_failed": "以前のセッションデータを削除できなかったため、新しいセッションは開始されませんでした。",
+        "member_required": "このセッションに参加したプレイヤーだけがこの操作を実行できます。",
         "max_turns": "このセッションは最大ターン数に達しました。/trpg_end または /trpg_export を使ってください。",
         "gm_failed": "GM 生成に失敗しました。後でもう一度試してください。",
         "roll_title": "ダイス結果",
@@ -320,8 +332,12 @@ MESSAGES = {
         "act_usage": "사용법: /trpg_act 행동 내용",
         "json_failed": "GM JSON을 해석할 수 없어 이번 턴의 상태 변경은 적용되지 않았습니다.",
         "roll_failed": "주사위 식 오류: {error}",
-        "ended": "세션을 종료했습니다. 로그는 보존됩니다.",
+        "ended": "세션을 종료하고 현재 세션 데이터를 삭제했습니다.",
+        "end_failed": "세션을 종료하지 못했으며 데이터는 삭제되지 않았습니다.",
         "exported": "세션 로그를 내보냈습니다: {path}",
+        "session_running": "이 대화에는 이미 진행 중인 세션이 있습니다. 먼저 /trpg_end 를 사용하고, 기록이 필요하면 그 전에 /trpg_export 를 사용하세요.",
+        "start_cleanup_failed": "이전 세션 데이터를 삭제하지 못해 새 세션을 시작하지 않았습니다.",
+        "member_required": "현재 TRPG 세션에 참가한 플레이어만 이 작업을 실행할 수 있습니다.",
         "max_turns": "이 세션은 최대 턴 수에 도달했습니다. /trpg_end 또는 /trpg_export 를 사용하세요.",
         "gm_failed": "GM 생성에 실패했습니다. 잠시 후 다시 시도하세요.",
         "roll_title": "주사위 결과",
@@ -434,6 +450,21 @@ class LLMTRPGPlugin(Star):
 
     @filter.command("trpg_start", desc="启动新的 LLM TRPG 跑团。")
     async def trpg_start(self, event: AstrMessageEvent, theme: GreedyStr = ""):
+        session_id = _session_id(event)
+        existing = await self.storage.load_session(session_id)
+        if existing and existing.status == "running":
+            yield event.plain_result(_msg(existing.language, "session_running"))
+            return
+        if existing:
+            try:
+                await self.storage.delete_session(session_id)
+            except Exception:
+                logger.exception("TRPG legacy session cleanup failed")
+                yield event.plain_result(
+                    _msg(existing.language, "start_cleanup_failed")
+                )
+                return
+
         raw_theme = str(theme or "").strip()
         requested_mode, script_query = _split_start_mode(raw_theme)
         default_theme = str(self.config.get("default_theme") or "奇幻冒险")
@@ -457,7 +488,7 @@ class LLMTRPGPlugin(Star):
             else normalize_ruleset_id(self.config.get("default_ruleset_id") or "d20_lite")
         )
         session = GameSession.new(
-            session_id=_session_id(event),
+            session_id=session_id,
             title=session_title,
             theme=session_theme,
             language=language,
@@ -764,6 +795,9 @@ class LLMTRPGPlugin(Star):
             if not session:
                 yield event.plain_result(_msg("zh", "no_session"))
                 return
+            if _sender_id(event) not in session.players:
+                yield event.plain_result(_msg(session.language, "member_required"))
+                return
             raw_action = str(action or "").strip()
             if not raw_action:
                 yield event.plain_result(_msg(session.language, "act_usage"))
@@ -952,24 +986,21 @@ class LLMTRPGPlugin(Star):
 
     @filter.command("trpg_end", desc="结束当前跑团。")
     async def trpg_end(self, event: AstrMessageEvent):
+        session = None
         try:
             session = await self._running_session(event)
             if not session:
                 yield event.plain_result(_msg("zh", "no_session"))
                 return
-            session.status = "ended"
-            output = _msg(session.language, "ended")
-            session.add_log(
-                user=_sender_label(event),
-                command="trpg_end",
-                input_text="",
-                output_summary=output,
-            )
-            await self.storage.save_session(session)
-            yield event.plain_result(output)
+            if _sender_id(event) not in session.players:
+                yield event.plain_result(_msg(session.language, "member_required"))
+                return
+            await self.storage.delete_session(session.session_id)
+            yield event.plain_result(_msg(session.language, "ended"))
         except Exception:
             logger.exception("TRPG end failed")
-            yield event.plain_result("结束跑团失败，请稍后重试。")
+            language = session.language if session else "zh"
+            yield event.plain_result(_msg(language, "end_failed"))
 
     @filter.command("trpg_export", desc="导出当前跑团 Markdown 日志。")
     async def trpg_export(self, event: AstrMessageEvent):
@@ -977,6 +1008,9 @@ class LLMTRPGPlugin(Star):
             session = await self.storage.load_session(_session_id(event))
             if not session:
                 yield event.plain_result(_msg("zh", "no_session"))
+                return
+            if _sender_id(event) not in session.players:
+                yield event.plain_result(_msg(session.language, "member_required"))
                 return
             path = export_session_markdown(session, self.data_dir)
             output = _msg(session.language, "exported", path=str(path))
