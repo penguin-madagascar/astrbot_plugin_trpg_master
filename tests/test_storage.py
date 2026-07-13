@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
+from main import LLMTRPGPlugin
 from models import CharacterPreset, GameSession, ScenarioScript
 from storage import SessionStorage
 
@@ -29,6 +30,12 @@ class KVContext:
 class FailingDeleteKVContext(KVContext):
     async def delete_kv_data(self, key):
         raise RuntimeError("kv delete failed")
+
+
+def test_plugin_uses_its_star_instance_for_kv_storage():
+    plugin = LLMTRPGPlugin(context=object())
+
+    assert plugin.storage.kv_store is plugin
 
 
 def test_storage_saves_and_loads_presets_via_file_fallback():

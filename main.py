@@ -350,7 +350,7 @@ class LLMTRPGPlugin(Star):
         self.context = context
         self.config = config or {}
         self.data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME)).resolve()
-        self.storage = SessionStorage(context, self.data_dir)
+        self.storage = SessionStorage(self, self.data_dir)
         self._register_web_apis()
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
