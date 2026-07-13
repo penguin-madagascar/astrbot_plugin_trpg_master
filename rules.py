@@ -156,7 +156,14 @@ def apply_ruleset_state_patch(
         return RulesetStatePatchResult(False, target, op, "pc not found")
 
     if op in {"damage", "heal"}:
-        amount = _safe_int(patch.get("value"), 0)
+        amount = _strict_int(patch.get("value"))
+        if amount is None or amount < 0:
+            return RulesetStatePatchResult(
+                False,
+                target,
+                op,
+                "value must be a non-negative integer",
+            )
         before = pc.hp
         pc.hp = max(0, pc.hp - amount if op == "damage" else pc.hp + amount)
         return RulesetStatePatchResult(
@@ -168,7 +175,9 @@ def apply_ruleset_state_patch(
     if op == "resource_delta":
         if not field_name:
             return RulesetStatePatchResult(False, target, op, "missing resource field")
-        delta = _safe_int(patch.get("value"), 0)
+        delta = _strict_int(patch.get("value"))
+        if delta is None:
+            return RulesetStatePatchResult(False, target, op, "invalid integer")
         before = _safe_int(pc.ruleset_data.get(field_name), 0)
         pc.ruleset_data[field_name] = before + delta
         return RulesetStatePatchResult(
@@ -180,7 +189,9 @@ def apply_ruleset_state_patch(
     if op == "skill_delta":
         if not field_name:
             return RulesetStatePatchResult(False, target, op, "missing skill field")
-        delta = _safe_int(patch.get("value"), 0)
+        delta = _strict_int(patch.get("value"))
+        if delta is None:
+            return RulesetStatePatchResult(False, target, op, "invalid integer")
         before = _safe_int(pc.skills.get(field_name), 0)
         pc.skills[field_name] = before + delta
         return RulesetStatePatchResult(
@@ -425,3 +436,10 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _strict_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

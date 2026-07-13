@@ -196,3 +196,58 @@ def test_ruleset_state_patches_handle_common_semistrict_ops():
         True,
     ]
     assert skipped.applied is False
+
+
+def test_ruleset_state_patches_reject_negative_damage_and_heal():
+    session = make_session()
+    pc = session.players["u1"]
+    initial_hp = pc.hp
+
+    damage = apply_ruleset_state_patch(
+        session,
+        {"target": "pc:艾莉丝", "op": "damage", "value": -3},
+    )
+    heal = apply_ruleset_state_patch(
+        session,
+        {"target": "pc:艾莉丝", "op": "heal", "value": -2},
+    )
+
+    assert damage.applied is False
+    assert heal.applied is False
+    assert pc.hp == initial_hp
+
+
+def test_ruleset_state_patches_reject_non_integer_values():
+    session = make_session()
+    pc = session.players["u1"]
+    initial_hp = pc.hp
+    initial_mp = pc.ruleset_data["mp"]
+    initial_skill = pc.skills["侦查"]
+
+    damage = apply_ruleset_state_patch(
+        session,
+        {"target": "pc:艾莉丝", "op": "damage", "value": "many"},
+    )
+    resource = apply_ruleset_state_patch(
+        session,
+        {
+            "target": "pc:艾莉丝",
+            "op": "resource_delta",
+            "field": "mp",
+            "value": "many",
+        },
+    )
+    skill = apply_ruleset_state_patch(
+        session,
+        {
+            "target": "pc:艾莉丝",
+            "op": "skill_delta",
+            "field": "侦查",
+            "value": "many",
+        },
+    )
+
+    assert [damage.applied, resource.applied, skill.applied] == [False, False, False]
+    assert pc.hp == initial_hp
+    assert pc.ruleset_data["mp"] == initial_mp
+    assert pc.skills["侦查"] == initial_skill
