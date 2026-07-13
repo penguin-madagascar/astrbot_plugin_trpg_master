@@ -87,6 +87,7 @@ except ModuleNotFoundError:  # pragma: no cover - local syntax checks outside As
         return decorator
 
 try:
+    from . import preset_commands
     from .dice import roll_dice
     from .dice_gif import generate_dice_roll_gif
     from .export import export_session_markdown
@@ -101,7 +102,6 @@ try:
         search_campaign_memory,
     )
     from .models import (
-        DEFAULT_ATTRIBUTES,
         CharacterPreset,
         GameSession,
         PlayerCharacter,
@@ -137,6 +137,7 @@ try:
         is_turn_order_active,
     )
 except ImportError:  # pragma: no cover - direct module loading outside package.
+    import preset_commands
     from dice import roll_dice
     from dice_gif import generate_dice_roll_gif
     from export import export_session_markdown
@@ -151,7 +152,6 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         search_campaign_memory,
     )
     from models import (
-        DEFAULT_ATTRIBUTES,
         CharacterPreset,
         GameSession,
         PlayerCharacter,
@@ -1264,7 +1264,7 @@ class LLMTRPGPlugin(Star):
         preset = presets.get(name)
         if preset is None:
             return _msg(language, "preset_not_found", name=name)
-        return _format_preset(language, preset)
+        return preset_commands.format_preset(language, preset)
 
     async def _preset_update(
         self,
@@ -1281,7 +1281,7 @@ class LLMTRPGPlugin(Star):
         preset = presets.get(name)
         if preset is None:
             return _msg(language, "preset_not_found", name=name)
-        change = _apply_preset_update(preset, field, value)
+        change = preset_commands.apply_preset_update(preset, field, value)
         presets[name] = preset
         await self.storage.save_presets(user_id, presets)
         return _msg(language, "preset_updated", name=name, change=change)
@@ -1690,13 +1690,6 @@ def _format_roll_text(language: str, result: Any) -> str:
     )
 
 
-def _format_preset(language: str, preset: CharacterPreset) -> str:
-    pc = preset.to_player_character(user_id="", display_name="")
-    return f"{_msg(language, 'preset_title')}: {preset.name}\n" + get_ruleset(
-        preset.ruleset_id
-    ).format_character(pc)
-
-
 def _format_session_rule_nodes(session: GameSession) -> str:
     scenario = session.scenario_script if isinstance(session.scenario_script, dict) else {}
     nodes = [item for item in scenario.get("rule_nodes", []) if isinstance(item, dict)]
@@ -1706,75 +1699,6 @@ def _format_session_rule_nodes(session: GameSession) -> str:
         f"- {str(node.get('title') or node.get('node_id') or 'untitled')}"
         for node in nodes
     )
-
-
-def _apply_preset_update(
-    preset: CharacterPreset,
-    field_name: str,
-    raw_value: str,
-) -> str:
-    field = str(field_name or "").strip()
-    value = str(raw_value or "").strip()
-    field_lower = field.lower()
-    field_upper = field.upper()
-    if not field:
-        raise ValueError("属性名称不能为空。")
-
-    if field_lower in {"name", "character_name"}:
-        if not value:
-            raise ValueError("角色名不能为空。")
-        preset.character_name = value
-        return f"character_name={value}"
-    if field_lower == "concept":
-        if not value:
-            raise ValueError("设定不能为空。")
-        preset.concept = value
-        return f"concept={value}"
-    if field_lower == "hp":
-        preset.hp = _parse_update_int(value, "hp")
-        return f"hp={preset.hp}"
-    if field_lower == "san":
-        preset.san = _parse_update_int(value, "san")
-        return f"san={preset.san}"
-    if field_upper in DEFAULT_ATTRIBUTES:
-        preset.attributes[field_upper] = _parse_update_int(value, field_upper)
-        return f"{field_upper}={preset.attributes[field_upper]}"
-    if field_lower.startswith("attr."):
-        attr_name = field[5:].strip().upper()
-        if not attr_name:
-            raise ValueError("属性名称不能为空。")
-        preset.attributes[attr_name] = _parse_update_int(value, attr_name)
-        return f"{attr_name}={preset.attributes[attr_name]}"
-    if field_lower.startswith("skill."):
-        skill_name = field[6:].strip()
-        if not skill_name:
-            raise ValueError("技能名称不能为空。")
-        preset.skills[skill_name] = _parse_update_int(value, skill_name)
-        return f"{skill_name}={preset.skills[skill_name]}"
-    if field_lower == "inventory":
-        preset.inventory = _split_preset_list_value(value)
-        return f"inventory={', '.join(preset.inventory) or '-'}"
-    if field_lower in {"status", "status_effects"}:
-        preset.status_effects = _split_preset_list_value(value)
-        return f"status={', '.join(preset.status_effects) or '-'}"
-
-    raise ValueError(f"不支持的属性名称：{field}")
-
-
-def _parse_update_int(value: str, field_name: str) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} 必须是整数。") from exc
-
-
-def _split_preset_list_value(value: str) -> list[str]:
-    text = str(value or "").strip()
-    if text == "-":
-        return []
-    for separator in ("，", "、"):
-        text = text.replace(separator, ",")
-    return [item.strip() for item in text.split(",") if item.strip()]
 
 
 def _scenario_history_summary(script: ScenarioScript) -> str:
@@ -1989,7 +1913,7 @@ def _parse_markdown_scenario(markdown: str) -> ScenarioScript:
     if not title:
         title = "导入剧本"
     hooks = _markdown_list_items("\n".join(sections.get("hooks", [])))
-    tags = _split_preset_list_value(_section_text(sections, "tags"))
+    tags = preset_commands.split_list_value(_section_text(sections, "tags"))
     gm_notes = _section_text(sections, "gm_notes")
     unknown = _section_text(sections, "unknown")
     if unknown:

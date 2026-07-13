@@ -1,22 +1,23 @@
 import asyncio
 
-from main import LLMTRPGPlugin, _apply_preset_update, _format_preset
+from main import LLMTRPGPlugin
 from models import CharacterPreset, GameSession
+from preset_commands import apply_preset_update, format_preset
 
 
-def test_apply_preset_update_changes_scalar_fields_and_attributes():
+def testapply_preset_update_changes_scalar_fields_and_attributes():
     preset = CharacterPreset(
         name="艾莉丝",
         character_name="Alice",
         concept="敏捷的游侠",
     )
 
-    _apply_preset_update(preset, "name", "莉亚")
-    _apply_preset_update(preset, "concept", "古城来的 探索者")
-    _apply_preset_update(preset, "hp", "12")
-    _apply_preset_update(preset, "san", "48")
-    _apply_preset_update(preset, "STR", "14")
-    _apply_preset_update(preset, "attr.dex", "13")
+    apply_preset_update(preset, "name", "莉亚")
+    apply_preset_update(preset, "concept", "古城来的 探索者")
+    apply_preset_update(preset, "hp", "12")
+    apply_preset_update(preset, "san", "48")
+    apply_preset_update(preset, "STR", "14")
+    apply_preset_update(preset, "attr.dex", "13")
 
     assert preset.name == "艾莉丝"
     assert preset.character_name == "莉亚"
@@ -27,41 +28,41 @@ def test_apply_preset_update_changes_scalar_fields_and_attributes():
     assert preset.attributes["DEX"] == 13
 
 
-def test_apply_preset_update_changes_skills_inventory_and_status():
+def testapply_preset_update_changes_skills_inventory_and_status():
     preset = CharacterPreset(
         name="艾莉丝",
         character_name="Alice",
         concept="敏捷的游侠",
     )
 
-    _apply_preset_update(preset, "skill.潜行", "60")
-    _apply_preset_update(preset, "inventory", "银钥匙，火把、绳索")
-    _apply_preset_update(preset, "status", "警觉,轻伤")
+    apply_preset_update(preset, "skill.潜行", "60")
+    apply_preset_update(preset, "inventory", "银钥匙，火把、绳索")
+    apply_preset_update(preset, "status", "警觉,轻伤")
 
     assert preset.skills == {"潜行": 60}
     assert preset.inventory == ["银钥匙", "火把", "绳索"]
     assert preset.status_effects == ["警觉", "轻伤"]
 
-    _apply_preset_update(preset, "inventory", "-")
-    _apply_preset_update(preset, "status", "-")
+    apply_preset_update(preset, "inventory", "-")
+    apply_preset_update(preset, "status", "-")
 
     assert preset.inventory == []
     assert preset.status_effects == []
 
 
-def test_apply_preset_update_rejects_unknown_fields_and_bad_integers():
+def testapply_preset_update_rejects_unknown_fields_and_bad_integers():
     preset = CharacterPreset(
         name="艾莉丝",
         character_name="Alice",
         concept="敏捷的游侠",
     )
 
-    _assert_value_error(lambda: _apply_preset_update(preset, "unknown", "1"))
-    _assert_value_error(lambda: _apply_preset_update(preset, "hp", "bad"))
-    _assert_value_error(lambda: _apply_preset_update(preset, "skill.", "60"))
+    _assert_value_error(lambda: apply_preset_update(preset, "unknown", "1"))
+    _assert_value_error(lambda: apply_preset_update(preset, "hp", "bad"))
+    _assert_value_error(lambda: apply_preset_update(preset, "skill.", "60"))
 
 
-def test_format_preset_includes_complete_character_card():
+def testformat_preset_includes_complete_character_card():
     preset = CharacterPreset(
         name="艾莉丝",
         character_name="Alice",
@@ -74,7 +75,7 @@ def test_format_preset_includes_complete_character_card():
         status_effects=["警觉"],
     )
 
-    text = _format_preset("zh", preset)
+    text = format_preset("zh", preset)
 
     assert "角色预设: 艾莉丝" in text
     assert "Ruleset: d20_lite" in text
@@ -87,7 +88,7 @@ def test_format_preset_includes_complete_character_card():
     assert "Status: 警觉" in text
 
 
-def test_format_preset_uses_coc7_ruleset_specific_card():
+def testformat_preset_uses_coc7_ruleset_specific_card():
     preset = CharacterPreset(
         name="艾莉丝",
         character_name="Alice",
@@ -99,7 +100,7 @@ def test_format_preset_uses_coc7_ruleset_specific_card():
         ruleset_data={"luck": 45, "mp": 10},
     )
 
-    text = _format_preset("zh", preset)
+    text = format_preset("zh", preset)
 
     assert "Ruleset: coc7_lite" in text
     assert "Investigator: Alice" in text
