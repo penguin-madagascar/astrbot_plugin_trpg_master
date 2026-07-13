@@ -1,6 +1,7 @@
 import asyncio
 
 from application import TRPGRuntime
+from action_commands import ActionCommandService
 from models import GameSession
 from session_commands import SessionCommandService
 
@@ -40,6 +41,20 @@ def test_runtime_normalizes_loaded_running_session():
 def test_session_command_service_keeps_owner_dependencies_dynamic():
     owner = FakeOwner(None)
     service = SessionCommandService(owner, call_gm=lambda *args, **kwargs: None)
+
+    replacement = object()
+    owner.storage = replacement
+
+    assert service.storage is replacement
+
+
+def test_action_command_service_keeps_owner_dependencies_dynamic():
+    owner = FakeOwner(None)
+    service = ActionCommandService(
+        owner,
+        call_gm=lambda *args, **kwargs: None,
+        call_command_agent=lambda *args, **kwargs: None,
+    )
 
     replacement = object()
     owner.storage = replacement
