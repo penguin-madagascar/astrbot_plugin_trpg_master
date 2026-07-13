@@ -5,6 +5,7 @@ from gm import parse_structured_patch
 from main import LLMTRPGPlugin
 from models import GameSession, PlayerCharacter, TurnOrderState
 from prompts import build_action_prompt
+from scenario_io import coerce_config_updates, load_config_schema
 from turn_order import (
     add_player_to_turn_order,
     apply_turn_controls,
@@ -401,7 +402,7 @@ def test_removed_turn_management_actions_show_usage():
 
 
 def test_config_schema_contains_turn_order_settings():
-    schema = main._load_config_schema()
+    schema = load_config_schema()
 
     assert schema["turn_order_enabled"]["type"] == "bool"
     assert schema["turn_order_enabled"]["default"] is True
@@ -411,12 +412,12 @@ def test_config_schema_contains_turn_order_settings():
 
 
 def test_turn_order_config_values_are_exposed_and_coerced():
-    schema = main._load_config_schema()
+    schema = load_config_schema()
     plugin = LLMTRPGPlugin(context=object())
     plugin.storage = FakeStorage()
 
     dashboard = asyncio.run(plugin.web_dashboard())
-    updates = main._coerce_config_updates(
+    updates = coerce_config_updates(
         schema,
         {
             "turn_order_enabled": "false",

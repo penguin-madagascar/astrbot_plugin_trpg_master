@@ -3,13 +3,9 @@ import json
 from pathlib import Path
 
 import main
-from main import (
-    LLMTRPGPlugin,
-    PLUGIN_NAME,
-    _coerce_config_updates,
-    _parse_scenario_import,
-)
+from main import LLMTRPGPlugin, PLUGIN_NAME
 from models import GameSession, ScenarioScript
+from scenario_io import coerce_config_updates, parse_scenario_import
 
 
 def test_parse_scenario_json_import_accepts_single_script():
@@ -30,7 +26,7 @@ def test_parse_scenario_json_import_accepts_single_script():
         ensure_ascii=False,
     )
 
-    scripts = _parse_scenario_import(payload, filename="scripts.json")
+    scripts = parse_scenario_import(payload, filename="scripts.json")
 
     assert scripts == [
         ScenarioScript(
@@ -70,7 +66,7 @@ def test_parse_scenario_json_import_accepts_play_mode_and_feature_flags():
         ensure_ascii=False,
     )
 
-    script = _parse_scenario_import(payload, filename="scripts.json")[0]
+    script = parse_scenario_import(payload, filename="scripts.json")[0]
 
     assert script.play_mode == "custom"
     assert script.feature_flags == {
@@ -115,7 +111,7 @@ def test_parse_scenario_markdown_import_uses_expected_sections():
 soft
 """.strip()
 
-    scripts = _parse_scenario_import(markdown, filename="fog.md")
+    scripts = parse_scenario_import(markdown, filename="fog.md")
     script = scripts[0]
 
     assert script.title == "雾镇"
@@ -147,7 +143,7 @@ custom
 }
 """.strip()
 
-    script = _parse_scenario_import(markdown, filename="fog.md")[0]
+    script = parse_scenario_import(markdown, filename="fog.md")[0]
 
     assert script.play_mode == "custom"
     assert all(value is False for value in script.feature_flags.values())
@@ -161,7 +157,7 @@ def test_parse_scenario_markdown_invalid_turn_order_mode_uses_default():
 invalid
 """.strip()
 
-    script = _parse_scenario_import(markdown, filename="fog.md")[0]
+    script = parse_scenario_import(markdown, filename="fog.md")[0]
 
     assert script.turn_order_mode == "llm_gm"
 
@@ -189,14 +185,14 @@ coc7_lite
 ]
 """.strip()
 
-    script = _parse_scenario_import(markdown, filename="fog.md")[0]
+    script = parse_scenario_import(markdown, filename="fog.md")[0]
 
     assert script.ruleset_id == "coc7_lite"
     assert script.rule_nodes[0].node_id == "library-spot"
     assert script.rule_nodes[0].check == {"type": "skill_check", "skill": "侦查"}
 
 
-def test_coerce_config_updates_accepts_schema_keys_and_basic_types():
+def testcoerce_config_updates_accepts_schema_keys_and_basic_types():
     schema = {
         "default_theme": {"type": "string"},
         "gm_system_prompt": {"type": "text"},
@@ -211,7 +207,7 @@ def test_coerce_config_updates_accepts_schema_keys_and_basic_types():
         "ignored": "value",
     }
 
-    updates = _coerce_config_updates(schema, payload)
+    updates = coerce_config_updates(schema, payload)
 
     assert updates == {
         "default_theme": "123",

@@ -5,17 +5,18 @@ from unittest.mock import patch
 import main
 from main import LLMTRPGPlugin
 from models import GameSession, PlayerCharacter
+from scenario_io import coerce_config_updates, load_config_schema
 from turn_order import add_player_to_turn_order
 
 
 class MessageInterceptTests(unittest.TestCase):
     def test_config_schema_exposes_command_agent_setting(self):
-        schema = main._load_config_schema()
+        schema = load_config_schema()
         plugin = LLMTRPGPlugin(context=object())
         plugin.storage = FakeStorage()
 
         dashboard = asyncio.run(plugin.web_dashboard())
-        updates = main._coerce_config_updates(
+        updates = coerce_config_updates(
             schema,
             {"command_agent_enabled": "false"},
         )
