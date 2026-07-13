@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .application import TRPGRuntime
     from .astrbot_compat import (
         AstrBotConfig,
         AstrMessageEvent,
@@ -19,6 +20,7 @@ try:
         request,
     )
 except ImportError:  # pragma: no cover - direct module loading outside package.
+    from application import TRPGRuntime
     from astrbot_compat import (
         AstrBotConfig,
         AstrMessageEvent,
@@ -47,7 +49,6 @@ try:
     from .language import detect_language_from_theme
     from .memory import (
         apply_knowledge_patches,
-        compact_campaign_knowledge,
         format_campaign_recap,
         player_visible_clues,
         record_turn_timeline_event,
@@ -57,23 +58,15 @@ try:
         CharacterPreset,
         GameSession,
         PlayerCharacter,
-        ScenarioScript,
-        default_feature_flags,
-        normalize_feature_flags,
-        normalize_play_mode,
         normalize_ruleset_id,
         normalize_turn_order_mode,
     )
     from .prompts import (
-        DEFAULT_GM_SYSTEM_PROMPT,
-        SIMPLE_GM_SYSTEM_PROMPT,
         build_action_prompt,
         build_command_agent_prompt,
         build_opening_prompt,
         build_resolution_prompt,
-        build_summary_prompt,
     )
-    from .rules import resolve_check_request
     from .state import apply_state_patches
     from .storage import SessionStorage
     from .turn_order import (
@@ -82,7 +75,6 @@ try:
         advance_turn_order,
         can_submit_action,
         can_finish_turn,
-        current_turn_player,
         initialize_turn_order,
         is_current_turn,
         is_turn_order_active,
@@ -100,7 +92,6 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
     from language import detect_language_from_theme
     from memory import (
         apply_knowledge_patches,
-        compact_campaign_knowledge,
         format_campaign_recap,
         player_visible_clues,
         record_turn_timeline_event,
@@ -110,23 +101,15 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         CharacterPreset,
         GameSession,
         PlayerCharacter,
-        ScenarioScript,
-        default_feature_flags,
-        normalize_feature_flags,
-        normalize_play_mode,
         normalize_ruleset_id,
         normalize_turn_order_mode,
     )
     from prompts import (
-        DEFAULT_GM_SYSTEM_PROMPT,
-        SIMPLE_GM_SYSTEM_PROMPT,
         build_action_prompt,
         build_command_agent_prompt,
         build_opening_prompt,
         build_resolution_prompt,
-        build_summary_prompt,
     )
-    from rules import resolve_check_request
     from state import apply_state_patches
     from storage import SessionStorage
     from turn_order import (
@@ -135,7 +118,6 @@ except ImportError:  # pragma: no cover - direct module loading outside package.
         advance_turn_order,
         can_submit_action,
         can_finish_turn,
-        current_turn_player,
         initialize_turn_order,
         is_current_turn,
         is_turn_order_active,
@@ -171,11 +153,12 @@ class LLMTRPGPlugin(Star):
         self.config = config or {}
         self.data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME)).resolve()
         self.storage = SessionStorage(self, self.data_dir)
+        self.runtime = TRPGRuntime(self)
         web_dashboard.register_web_apis(self.context, PLUGIN_NAME, self)
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def trpg_message_intercept(self, event: AstrMessageEvent):
-        session = await self._running_session(event)
+        session = await self.runtime.running_session(event)
         if not session:
             return
 
@@ -185,7 +168,7 @@ class LLMTRPGPlugin(Star):
             return
         sender_id = event_utils.sender_id(event)
         is_direct_trpg_command = stripped.lower().startswith("/trpg_")
-        command_agent_enabled = self._session_feature_enabled(
+        command_agent_enabled = self.runtime.session_feature_enabled(
             session,
             "command_agent_enabled",
         )
@@ -278,7 +261,7 @@ class LLMTRPGPlugin(Star):
             else None
         )
         play_mode = requested_mode or (script.play_mode if script else "simple")
-        feature_flags = self._start_feature_flags(play_mode, script)
+        feature_flags = self.runtime.start_feature_flags(play_mode, script)
         session_title = script.title if script else (script_query or default_theme)
         session_theme = script.theme if script else session_title
         language = (
@@ -326,7 +309,7 @@ class LLMTRPGPlugin(Star):
                 self.context,
                 event,
                 prompt=build_opening_prompt(session),
-                system_prompt=self._gm_system_prompt(session),
+                system_prompt=self.runtime.gm_system_prompt(session),
             )
         except Exception:
             logger.exception("TRPG opening generation failed")
@@ -346,7 +329,7 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_join", desc="加入当前跑团并创建角色。")
     async def trpg_join(self, event: AstrMessageEvent, query: GreedyStr = ""):
         try:
-            session = await self._running_session(event)
+            session = await self.runtime.running_session(event)
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
@@ -437,7 +420,7 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_preset", desc="管理自己的 TRPG 角色预设。")
     async def trpg_preset(self, event: AstrMessageEvent, query: GreedyStr = ""):
         try:
-            language = await self._command_language(event)
+            language = await self.runtime.command_language(event)
             raw = str(query or "").strip()
             action, rest = event_utils.split_first(raw)
             action = action.lower()
@@ -467,7 +450,7 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_pc", desc="查看自己的角色卡。")
     async def trpg_pc(self, event: AstrMessageEvent):
         try:
-            session = await self._running_session(event)
+            session = await self.runtime.running_session(event)
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
@@ -483,7 +466,7 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_status", desc="查看当前跑团状态。")
     async def trpg_status(self, event: AstrMessageEvent):
         try:
-            session = await self._running_session(event)
+            session = await self.runtime.running_session(event)
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
@@ -495,7 +478,7 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_turn", desc="查看或管理当前跑团行动顺序。")
     async def trpg_turn(self, event: AstrMessageEvent, query: GreedyStr = ""):
         try:
-            session = await self._running_session(event)
+            session = await self.runtime.running_session(event)
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
@@ -536,7 +519,7 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_recap", desc="查看玩家可见的战役回顾。")
     async def trpg_recap(self, event: AstrMessageEvent):
         try:
-            session = await self._running_session(event)
+            session = await self.runtime.running_session(event)
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
@@ -548,7 +531,7 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_memory", desc="搜索玩家可见的战役记忆。")
     async def trpg_memory(self, event: AstrMessageEvent, query: GreedyStr = ""):
         try:
-            session = await self._running_session(event)
+            session = await self.runtime.running_session(event)
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
@@ -575,7 +558,7 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_clues", desc="查看玩家可见线索。")
     async def trpg_clues(self, event: AstrMessageEvent):
         try:
-            session = await self._running_session(event)
+            session = await self.runtime.running_session(event)
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
@@ -595,7 +578,7 @@ class LLMTRPGPlugin(Star):
     @filter.command("trpg_act", desc="提交玩家行动并推进剧情。")
     async def trpg_act(self, event: AstrMessageEvent, action: GreedyStr = ""):
         try:
-            session = await self._running_session(event)
+            session = await self.runtime.running_session(event)
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
@@ -628,7 +611,7 @@ class LLMTRPGPlugin(Star):
                     )
                 )
                 return
-            turn_warning = self._turn_order_warning(session, sender_id)
+            turn_warning = self.runtime.turn_order_warning(session, sender_id)
             should_advance_turn = (
                 session.turn_order.mode == "soft"
                 and is_turn_order_active(session)
@@ -638,13 +621,17 @@ class LLMTRPGPlugin(Star):
                 self.context,
                 event,
                 prompt=build_action_prompt(session, actor, raw_action),
-                system_prompt=self._gm_system_prompt(session),
+                system_prompt=self.runtime.gm_system_prompt(session),
             )
 
-            if not self._session_feature_enabled(session, "structured_patch_enabled"):
+            if not self.runtime.session_feature_enabled(
+                session, "structured_patch_enabled"
+            ):
                 final = presentation.prepend_turn_warning(turn_warning, raw_reply.strip())
-                self._finish_turn(session, event, raw_action, final)
-                await self._trim_recent_events(session, event)
+                self.runtime.finish_turn(session, event, raw_action, final)
+                await self.runtime.trim_recent_events(
+                    session, event, call_gm
+                )
                 await self.storage.save_session(session)
                 yield event.plain_result(final)
                 return
@@ -660,23 +647,23 @@ class LLMTRPGPlugin(Star):
                     part for part in (raw_reply.strip(), presentation.message(session.language, "json_failed")) if part
                 )
                 final = presentation.prepend_turn_warning(turn_warning, final)
-                if self._session_feature_enabled(session, "knowledge_enabled"):
+                if self.runtime.session_feature_enabled(session, "knowledge_enabled"):
                     record_turn_timeline_event(
                         session,
                         actor=actor,
                         action=raw_action,
                         outcome=final,
                     )
-                self._finish_turn(session, event, raw_action, final)
+                self.runtime.finish_turn(session, event, raw_action, final)
                 if should_advance_turn:
                     advance_turn_order(session)
-                await self._trim_recent_events(session, event)
+                await self.runtime.trim_recent_events(session, event, call_gm)
                 await self.storage.save_session(session)
                 yield event.plain_result(final)
                 return
 
-            if self._session_feature_enabled(session, "dice_requests_enabled"):
-                dice_lines, dice_state_patches = self._execute_dice_requests(
+            if self.runtime.session_feature_enabled(session, "dice_requests_enabled"):
+                dice_lines, dice_state_patches = self.runtime.execute_dice_requests(
                     session,
                     parsed.patch["dice_requests"],
                 )
@@ -685,27 +672,31 @@ class LLMTRPGPlugin(Star):
             state_patches = [*dice_state_patches, *parsed.patch["state_patches"]]
             state_results = (
                 apply_state_patches(session, state_patches)
-                if self._session_feature_enabled(session, "state_patch_enabled")
+                if self.runtime.session_feature_enabled(session, "state_patch_enabled")
                 else []
             )
-            if self._session_feature_enabled(session, "knowledge_enabled"):
+            if self.runtime.session_feature_enabled(session, "knowledge_enabled"):
                 apply_knowledge_patches(session, parsed.patch["knowledge_patches"])
             turn_results = (
                 apply_turn_controls(session, parsed.patch["turn_controls"])
-                if self._session_feature_enabled(session, "turn_order_enabled")
+                if self.runtime.session_feature_enabled(session, "turn_order_enabled")
                 else []
             )
-            self._apply_scene_and_memory(
+            self.runtime.apply_scene_and_memory(
                 session,
                 parsed.patch,
-                include_memory=self._session_feature_enabled(session, "knowledge_enabled"),
+                include_memory=self.runtime.session_feature_enabled(
+                    session, "knowledge_enabled"
+                ),
             )
 
             dice_summary = "\n".join(dice_lines)
             state_summary = "\n".join(result.message for result in state_results)
             turn_summary = "\n".join(result.message for result in turn_results)
             resolution = ""
-            if self._session_feature_enabled(session, "second_pass_resolution_enabled") and (
+            if self.runtime.session_feature_enabled(
+                session, "second_pass_resolution_enabled"
+            ) and (
                 dice_summary or state_summary
             ):
                 try:
@@ -718,7 +709,7 @@ class LLMTRPGPlugin(Star):
                             dice_summary,
                             state_summary,
                         ),
-                        system_prompt=self._gm_system_prompt(session),
+                        system_prompt=self.runtime.gm_system_prompt(session),
                     )
                 except Exception:
                     logger.warning("TRPG second pass resolution failed")
@@ -732,17 +723,17 @@ class LLMTRPGPlugin(Star):
                 resolution,
             )
             final = presentation.prepend_turn_warning(turn_warning, final)
-            if self._session_feature_enabled(session, "knowledge_enabled"):
+            if self.runtime.session_feature_enabled(session, "knowledge_enabled"):
                 record_turn_timeline_event(
                     session,
                     actor=actor,
                     action=raw_action,
                     outcome=final,
                 )
-            self._finish_turn(session, event, raw_action, final)
+            self.runtime.finish_turn(session, event, raw_action, final)
             if should_advance_turn:
                 advance_turn_order(session)
-            await self._trim_recent_events(session, event)
+            await self.runtime.trim_recent_events(session, event, call_gm)
             await self.storage.save_session(session)
             yield event.plain_result(final)
         except Exception:
@@ -800,7 +791,7 @@ class LLMTRPGPlugin(Star):
     async def trpg_end(self, event: AstrMessageEvent):
         session = None
         try:
-            session = await self._running_session(event)
+            session = await self.runtime.running_session(event)
             if not session:
                 yield event.plain_result(presentation.message("zh", "no_session"))
                 return
@@ -830,91 +821,6 @@ class LLMTRPGPlugin(Star):
         except Exception:
             logger.exception("TRPG export failed")
             yield event.plain_result("导出跑团日志失败，请稍后重试。")
-
-    async def _running_session(self, event: AstrMessageEvent) -> GameSession | None:
-        session = await self.storage.load_session(event_utils.session_id(event))
-        if not session or session.status != "running":
-            return None
-        if not session.language:
-            session.language = str(self.config.get("response_language") or "zh")
-        session.play_mode = normalize_play_mode(
-            getattr(session, "play_mode", "advanced"),
-            default="advanced",
-        )
-        session.feature_flags = normalize_feature_flags(
-            getattr(session, "feature_flags", {}) or {},
-            play_mode=session.play_mode,
-        )
-        return session
-
-    async def _command_language(self, event: AstrMessageEvent) -> str:
-        session = await self.storage.load_session(event_utils.session_id(event))
-        if session and session.status == "running":
-            return session.language or "zh"
-        return "zh"
-
-    def _start_feature_flags(
-        self,
-        play_mode: str,
-        script: ScenarioScript | None,
-    ) -> dict[str, bool]:
-        normalized_mode = normalize_play_mode(play_mode, default="advanced")
-        source_flags = script.feature_flags if script and normalized_mode == "custom" else {}
-        flags = normalize_feature_flags(source_flags, play_mode=normalized_mode)
-        if normalized_mode == "advanced":
-            flags["command_agent_enabled"] = event_utils.config_bool(
-                self.config,
-                "command_agent_enabled",
-                True,
-            )
-            flags["turn_order_enabled"] = (
-                True
-                if script
-                else event_utils.config_bool(
-                    self.config, "turn_order_enabled", True
-                )
-            )
-            flags["state_patch_enabled"] = event_utils.config_bool(
-                self.config,
-                "allow_state_patch",
-                True,
-            )
-            flags["second_pass_resolution_enabled"] = event_utils.config_bool(
-                self.config,
-                "second_pass_resolution",
-                True,
-            )
-        return flags
-
-    def _session_feature_enabled(
-        self,
-        session: GameSession,
-        key: str,
-    ) -> bool:
-        mode = normalize_play_mode(
-            getattr(session, "play_mode", "advanced"),
-            default="advanced",
-        )
-        flags = normalize_feature_flags(
-            getattr(session, "feature_flags", {}) or {},
-            play_mode=mode,
-        )
-        enabled = bool(flags.get(key, default_feature_flags(mode).get(key, True)))
-        if mode != "advanced":
-            return enabled
-        if key == "command_agent_enabled":
-            return enabled and event_utils.config_bool(
-                self.config, "command_agent_enabled", True
-            )
-        if key == "state_patch_enabled":
-            return enabled and event_utils.config_bool(
-                self.config, "allow_state_patch", True
-            )
-        if key == "second_pass_resolution_enabled":
-            return enabled and event_utils.config_bool(
-                self.config, "second_pass_resolution", True
-            )
-        return enabled
 
     async def _command_agent_command_line(
         self,
@@ -1149,111 +1055,3 @@ class LLMTRPGPlugin(Star):
         return await web_dashboard.WebDashboardService(
             self.storage, self.config, self.data_dir
         ).export_scripts()
-
-    def _gm_system_prompt(self, session: GameSession | None = None) -> str:
-        if session is not None and not self._session_feature_enabled(
-            session,
-            "structured_patch_enabled",
-        ):
-            return SIMPLE_GM_SYSTEM_PROMPT
-        return str(self.config.get("gm_system_prompt") or DEFAULT_GM_SYSTEM_PROMPT)
-
-    def _execute_dice_requests(
-        self,
-        session: GameSession,
-        requests: list[dict[str, Any]],
-    ) -> tuple[list[str], list[dict[str, Any]]]:
-        lines: list[str] = []
-        state_patches: list[dict[str, Any]] = []
-        for request in requests:
-            result = resolve_check_request(session, request)
-            lines.append(result.message)
-            state_patches.extend(result.state_patches)
-        return lines, state_patches
-
-    def _apply_scene_and_memory(
-        self,
-        session: GameSession,
-        patch: dict[str, Any],
-        *,
-        include_memory: bool = True,
-    ) -> None:
-        scene_patch = patch.get("scene_patch") or {}
-        if isinstance(scene_patch, dict):
-            for key in ("location", "description"):
-                value = scene_patch.get(key)
-                if value:
-                    session.scene[key] = str(value)
-        if not include_memory:
-            return
-        session.plot_threads.extend(
-            item for item in patch.get("new_plot_threads", []) if item
-        )
-        session.recent_events.extend(
-            item for item in patch.get("memory_notes", []) if item
-        )
-
-    def _finish_turn(
-        self,
-        session: GameSession,
-        event: AstrMessageEvent,
-        action: str,
-        output: str,
-    ) -> None:
-        session.turn_count += 1
-        summary = (
-            f"{event_utils.sender_name(event)}: {action} -> "
-            f"{event_utils.one_line(output, 180)}"
-        )
-        session.recent_events.append(summary)
-        session.add_log(
-            user=event_utils.sender_label(event),
-            command="trpg_act",
-            input_text=action,
-            output_summary=event_utils.one_line(output, 200),
-        )
-
-    async def _trim_recent_events(
-        self,
-        session: GameSession,
-        event: AstrMessageEvent,
-    ) -> None:
-        limit = max(
-            1, event_utils.safe_int(self.config.get("max_recent_events"), 20)
-        )
-        timeline_limit = event_utils.safe_int(
-            self.config.get("max_timeline_events"), 80
-        )
-        if not self._session_feature_enabled(session, "knowledge_enabled"):
-            session.recent_events = session.recent_events[-limit:]
-            return
-        if len(session.recent_events) <= limit:
-            compact_campaign_knowledge(session, max_timeline=timeline_limit)
-            return
-        try:
-            summary = await call_gm(
-                self.context,
-                event,
-                prompt=build_summary_prompt(session),
-                system_prompt=self._gm_system_prompt(session),
-            )
-            if summary:
-                session.history_summary = summary
-        except Exception:
-            logger.warning("TRPG history summary update failed")
-        session.recent_events = session.recent_events[-limit:]
-        compact_campaign_knowledge(session, max_timeline=timeline_limit)
-
-    def _turn_order_warning(self, session: GameSession, user_id: str) -> str:
-        if session.turn_order.mode != "soft":
-            return ""
-        if not is_turn_order_active(session) or is_current_turn(session, user_id):
-            return ""
-        player = current_turn_player(session)
-        if player is None:
-            return ""
-        return presentation.message(
-            session.language,
-            "turn_out_of_order",
-            current=player.character_name,
-        )
